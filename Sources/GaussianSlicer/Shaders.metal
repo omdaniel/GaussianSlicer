@@ -498,17 +498,21 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 {
     constexpr sampler textureSampler(mag_filter::linear, min_filter::linear);
 
-    float texWidth = (float)densityTexture.get_width();
-    float texHeight = (float)densityTexture.get_height();
-
     float density = densityTexture.sample(textureSampler, in.texCoord).r;
+    // 1. Calculate the raw, unclamped normalized density.
     float normRaw = normalizeDensityRaw(density, viz);
+
+    // 2. Calculate screen-space derivatives (gradient) of the normalized density.
+    // This must be done on the raw, unclamped value.
+    float dx = dfdx(normRaw);
+    float dy = dfdy(normRaw);
+    // Calculate the magnitude of the density change per pixel (L2 norm).
+    float gradientMagnitude = length(float2(dx, dy));
 
     uint colorLevels = viz.colorLevels;
     float levels = max((float)colorLevels, 1.0f);
-    float guard = 0.5f / levels;
-    bool skipOutline = (normRaw <= -guard || normRaw >= 1.0f + guard || colorLevels <= 1);
 
+    // Clamped value used for color lookup and boundary checks.
     float normOriginal = clamp(normRaw, 0.0f, 1.0f);
     uint bandIndex = 0;
     float normForColor = normOriginal;
@@ -521,33 +525,35 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     }
 
     float3 color = sampleColormap(viz.colormapIndex, normForColor);
-    if (!skipOutline && viz.outlineWidth > 0.0f && normOriginal > 0.0f && normOriginal < 1.0f) {
-        float2 texel = float2(texWidth > 1.0f ? 1.0f / (texWidth - 1.0f) : 0.0f,
-                              texHeight > 1.0f ? 1.0f / (texHeight - 1.0f) : 0.0f);
 
-        float normRight = sampleNormalizedRaw(densityTexture, textureSampler, in.texCoord + float2(texel.x, 0.0f), viz);
-        float normLeft  = sampleNormalizedRaw(densityTexture, textureSampler, in.texCoord - float2(texel.x, 0.0f), viz);
-        float normUp    = sampleNormalizedRaw(densityTexture, textureSampler, in.texCoord + float2(0.0f, texel.y), viz);
-        float normDown  = sampleNormalizedRaw(densityTexture, textureSampler, in.texCoord - float2(0.0f, texel.y), viz);
+    // 3. Robust Contour Outlines (Uniform Screen-Space Width)
+    if (viz.outlineWidth > 0.0f && colorLevels > 1) {
+        // 4. Masking: Prevent stray contours outside the valid range [0, 1].
+        // We check the raw value. A small epsilon handles potential minor interpolation artifacts near the boundaries.
+        if (normRaw >= -1e-6f && normRaw <= 1.0f + 1e-6f) {
+            // 5. Calculate distance to the nearest contour line in data space.
+            // Contours are at 1/L, 2/L, ..., (L-1)/L. Spacing is 1/L.
+            float spacing = 1.0f / levels;
+            // Use fmod on the clamped value (normOriginal) as normRaw might be slightly outside [0, 1].
+            float dist_mod = fmod(normOriginal, spacing);
+            // Distance to the nearest boundary (below or above).
+            float distanceData = min(dist_mod, spacing - dist_mod);
 
-        float dx = (normRight - normLeft) * 0.5f;
-        float dy = (normUp - normDown) * 0.5f;
-        float gradMagnitude = sqrt(dx * dx + dy * dy);
-        float gradFloor = 1.0f / max(texWidth, texHeight);
-        gradMagnitude = max(gradMagnitude, gradFloor);
+            // 6. Calculate the distance in pixels. Protect against division by zero in flat areas.
+            float pixelDistance = distanceData / max(gradientMagnitude, 1e-6f);
 
-        float scaled = clamp(normRaw, 0.0f, 1.0f) * levels;
-        float band = clamp(floor(scaled), 0.0f, levels - 1.0f);
-        float left = band / levels;
-        float right = (band + 1.0f) / levels;
-        float interior = clamp(normRaw, left + 1e-6f, right - 1e-6f);
-        float distNormalized = min(interior - left, right - interior);
-        float pixelDistance = distNormalized / gradMagnitude;
+            // 7. Calculate outline factor (alpha) with anti-aliasing (1-pixel falloff).
+            float halfWidth = viz.outlineWidth * 0.5f;
+            // Reversed smoothstep (edge0 > edge1): 1 inside the line, 0 outside.
+            float outlineFactor = smoothstep(halfWidth + 0.5f, halfWidth - 0.5f, pixelDistance);
 
-        float halfWidth = viz.outlineWidth * 0.5f;
-        float feather = max(1.0f, viz.outlineWidth * 0.5f);
-        float outlineFactor = smoothstep(halfWidth + feather, halfWidth, pixelDistance);
-        color = mix(color, float3(0.0, 0.0, 0.0), outlineFactor);
+            // 8. Exclude boundaries at the very min (0.0) and max (1.0).
+            if (normOriginal < 1e-5f || normOriginal > 1.0f - 1e-5f) {
+                 outlineFactor = 0.0f;
+            }
+
+            color = mix(color, float3(0.0, 0.0, 0.0), outlineFactor);
+        }
     }
 
     return float4(color, 1.0);
