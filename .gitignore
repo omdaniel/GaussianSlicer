@@ -1,0 +1,16 @@
+# SwiftPM build artifacts
+.build/
+
+# Xcode build data
+DerivedData/
+*.xcworkspace/
+
+# User-specific files
+*.DS_Store
+.env
+
+# Generated dSYM bundles
+*.dSYM
+
+# SwiftPM package manager caches
+.swiftpm/
