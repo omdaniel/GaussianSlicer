@@ -482,15 +482,6 @@ inline float quantizeNormalizedValue(float norm, uint levels, thread uint &bandI
     return paletteIndex / 255.0f;
 }
 
-inline float sampleNormalizedRaw(texture2d<float> tex,
-                                 sampler samp,
-                                 float2 coord,
-                                 constant VisualizationConfig &viz) {
-    float2 clamped = clamp(coord, float2(0.0f), float2(1.0f));
-    float density = tex.sample(samp, clamped).r;
-    return normalizeDensityRaw(density, viz);
-}
-
 // Fragment shader applies normalization and color map
 fragment float4 fragmentShader(VertexOut in [[stage_in]],
                                texture2d<float> densityTexture [[texture(0)]],
@@ -498,12 +489,12 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 {
     constexpr sampler textureSampler(mag_filter::linear, min_filter::linear);
 
+    // 1. Sample density and calculate the raw, unclamped normalized density.
     float density = densityTexture.sample(textureSampler, in.texCoord).r;
-    // 1. Calculate the raw, unclamped normalized density.
     float normRaw = normalizeDensityRaw(density, viz);
 
     // 2. Calculate screen-space derivatives (gradient) of the normalized density.
-    // This must be done on the raw, unclamped value.
+    // This must be done on the raw, unclamped value for accuracy, especially near boundaries.
     float dx = dfdx(normRaw);
     float dy = dfdy(normRaw);
     // Calculate the magnitude of the density change per pixel (L2 norm).
@@ -512,7 +503,7 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     uint colorLevels = viz.colorLevels;
     float levels = max((float)colorLevels, 1.0f);
 
-    // Clamped value used for color lookup and boundary checks.
+    // 3. Prepare values for color mapping (clamped and quantized).
     float normOriginal = clamp(normRaw, 0.0f, 1.0f);
     uint bandIndex = 0;
     float normForColor = normOriginal;
@@ -526,31 +517,32 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 
     float3 color = sampleColormap(viz.colormapIndex, normForColor);
 
-    // 3. Robust Contour Outlines (Uniform Screen-Space Width)
+    // 4. Robust Contour Outlines (Uniform Screen-Space Width)
+    // We only draw outlines if width is positive and there are internal boundaries (L > 1).
     if (viz.outlineWidth > 0.0f && colorLevels > 1) {
-        // 4. Masking: Prevent stray contours outside the valid range [0, 1].
-        // We check the raw value. A small epsilon handles potential minor interpolation artifacts near the boundaries.
-        if (normRaw >= -1e-6f && normRaw <= 1.0f + 1e-6f) {
-            // 5. Calculate distance to the nearest contour line in data space.
-            // Contours are at 1/L, 2/L, ..., (L-1)/L. Spacing is 1/L.
-            float spacing = 1.0f / levels;
-            // Use fmod on the clamped value (normOriginal) as normRaw might be slightly outside [0, 1].
-            float dist_mod = fmod(normOriginal, spacing);
-            // Distance to the nearest boundary (below or above).
-            float distanceData = min(dist_mod, spacing - dist_mod);
 
-            // 6. Calculate the distance in pixels. Protect against division by zero in flat areas.
-            float pixelDistance = distanceData / max(gradientMagnitude, 1e-6f);
+        // 5. Masking: Prevent stray contours caused by significant interpolation artifacts (overshoot/undershoot).
+        // A small epsilon tolerates minor artifacts near the boundaries.
+        if (normRaw >= -1e-5f && normRaw <= 1.0f + 1e-5f) {
 
-            // 7. Calculate outline factor (alpha) with anti-aliasing (1-pixel falloff).
-            float halfWidth = viz.outlineWidth * 0.5f;
-            // Reversed smoothstep (edge0 > edge1): 1 inside the line, 0 outside.
-            float outlineFactor = smoothstep(halfWidth + 0.5f, halfWidth - 0.5f, pixelDistance);
+            // 6. Calculate distance to the nearest contour line, explicitly excluding Min/Max boundaries.
+            float scaled = normOriginal * levels;
+            float nearestBoundaryIndex = round(scaled);
+            float distanceDataScaled = fabs(scaled - nearestBoundaryIndex);
 
-            // 8. Exclude boundaries at the very min (0.0) and max (1.0).
-            if (normOriginal < 1e-5f || normOriginal > 1.0f - 1e-5f) {
-                 outlineFactor = 0.0f;
+            // 7. Exclude boundaries at Min (0) and Max (L).
+            bool isMinMaxBoundary = (nearestBoundaryIndex < 0.5f) || (nearestBoundaryIndex > levels - 0.5f);
+            if (isMinMaxBoundary) {
+                distanceDataScaled = 0.5f;
             }
+
+            // 8. Calculate the distance in pixels.
+            float gradientMagnitudeScaled = gradientMagnitude * levels;
+            float pixelDistance = distanceDataScaled / max(gradientMagnitudeScaled, 1e-6f);
+
+            // 9. Calculate outline factor (alpha) with anti-aliasing (1-pixel falloff).
+            float halfWidth = viz.outlineWidth * 0.5f;
+            float outlineFactor = smoothstep(halfWidth + 0.5f, halfWidth - 0.5f, pixelDistance);
 
             color = mix(color, float3(0.0, 0.0, 0.0), outlineFactor);
         }
@@ -558,3 +550,4 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 
     return float4(color, 1.0);
 }
+
