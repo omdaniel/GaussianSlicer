@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // The entry point for the macOS SwiftUI Application
 @main
@@ -6,6 +7,12 @@ struct GaussianSlicerApp: App {
     init() {
         if RuntimeConfig.shared.shouldExit {
             exit(EXIT_SUCCESS)
+        }
+        // Ensure the app becomes a regular, frontmost app when launched from Terminal
+        NSApplication.shared.setActivationPolicy(.regular)
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            NSApplication.shared.windows.forEach { $0.makeKeyAndOrderFront(nil) }
         }
     }
     

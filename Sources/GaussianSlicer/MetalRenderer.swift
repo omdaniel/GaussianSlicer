@@ -1,4 +1,5 @@
 // MetalRenderer.swift
+import Combine
 import Foundation
 import MetalKit
 import simd
@@ -29,11 +30,11 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
     var device: MTLDevice
     var commandQueue: MTLCommandQueue
     
-    let runtimeConfig = RuntimeConfig.shared
-    let NUM_DISTRIBUTIONS: Int
-    let GRID_RESOLUTION: Int
-    let GRID_MIN: Float
-    let GRID_MAX: Float
+    private var settings: RendererSettings
+    @Published private(set) var numDistributions: Int
+    @Published private(set) var gridResolution: Int
+    @Published private(set) var gridMin: Float
+    @Published private(set) var gridMax: Float
 
     // Buffers
     var gaussianBuffer: MTLBuffer!
@@ -50,29 +51,32 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
     
     // Output
     var densityTexture: MTLTexture!
+    private var lastCommandBuffer: MTLCommandBuffer?
 
     // State
     @Published var currentOffset: Float = 0.0
     @Published var frameTime: Double = 0.0 // Performance metric
     var isInitialized = false
     private let initializationTimeoutSeconds: TimeInterval = 10.0
+    @Published var isExporting = false
 
-    init(device: MTLDevice) {
+    init(device: MTLDevice, settings: RendererSettings) {
         self.device = device
         self.commandQueue = self.device.makeCommandQueue()!
+        self.settings = settings
+        self.numDistributions = settings.numDistributions
+        self.gridResolution = settings.gridResolution
+        self.gridMin = settings.gridMin
+        self.gridMax = settings.gridMax
 
-        NUM_DISTRIBUTIONS = runtimeConfig.numDistributions
-        GRID_RESOLUTION = runtimeConfig.gridResolution
-        GRID_MIN = runtimeConfig.gridMin
-        GRID_MAX = runtimeConfig.gridMax
         visualizationConfig = VisualizationConfig(
-            colormapIndex: runtimeConfig.colormap.rawValue,
-            invert: runtimeConfig.invertColormap ? 1 : 0,
-            logScale: runtimeConfig.useLogScale ? 1 : 0,
-            colorLevels: runtimeConfig.colorLevels,
-            densityMin: runtimeConfig.densityMin,
-            densityMax: runtimeConfig.densityMax,
-            outlineWidth: runtimeConfig.outlineWidth
+            colormapIndex: settings.colormap.rawValue,
+            invert: settings.invertColormap ? 1 : 0,
+            logScale: settings.useLogScale ? 1 : 0,
+            colorLevels: settings.colorLevels,
+            densityMin: settings.densityMin,
+            densityMax: settings.densityMax,
+            outlineWidth: settings.outlineWidth
         )
 
         super.init()
@@ -98,43 +102,39 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
     }
     
     func setupMetal() {
-        let planeNormal = runtimeConfig.planeNormal
-        // Calculate R such that rows are [u, v, n]
+        let planeNormal = settings.planeNormal
         let rotationMatrix = MetalRenderer.getRotationMatrix(normal: planeNormal)
-        
-        // Initial configuration setup
+        let clampedOffset = max(min(currentOffset, gridMax), gridMin)
+        currentOffset = clampedOffset
+
         self.config = Config(
-            numDistributions: UInt32(max(0, min(NUM_DISTRIBUTIONS, Int(UInt32.max)))),
+            numDistributions: UInt32(max(0, min(numDistributions, Int(UInt32.max)))),
             rotationMatrix: rotationMatrix,
             planeNormal: planeNormal,
-            planeOffset: 0.0,
-            gridMin: GRID_MIN,
-            gridMax: GRID_MAX
+            planeOffset: clampedOffset,
+            gridMin: gridMin,
+            gridMax: gridMax
         )
     }
     
     func generateData() {
-        print("Generating \(NUM_DISTRIBUTIONS) distributions...")
+        print("Generating \(numDistributions) distributions...")
         let startTime = CACurrentMediaTime()
         let (gaussians, seed) = GMMGenerator.generate(
-            count: NUM_DISTRIBUTIONS,
-            meanStdDev: runtimeConfig.meanStdDev,
-            covarianceScale: runtimeConfig.covarianceScale,
-            seed: runtimeConfig.seed
+            count: numDistributions,
+            meanStdDev: settings.meanStdDev,
+            covarianceScale: settings.covarianceScale,
+            seed: settings.seed
         )
         let endTime = CACurrentMediaTime()
         print("Data generation time: \(String(format: "%.4f", endTime - startTime))s (seed: \(seed))")
 
         
-        // Create Buffers using MemoryLayout<T>.stride
-        let gaussianSize = MemoryLayout<Gaussian3D>.stride * NUM_DISTRIBUTIONS
-        let precalcSize = MemoryLayout<PrecalculatedParams>.stride * NUM_DISTRIBUTIONS
-        let dynamicSize = MemoryLayout<DynamicParams>.stride * NUM_DISTRIBUTIONS
+        let gaussianSize = MemoryLayout<Gaussian3D>.stride * numDistributions
+        let precalcSize = MemoryLayout<PrecalculatedParams>.stride * numDistributions
+        let dynamicSize = MemoryLayout<DynamicParams>.stride * numDistributions
         
-        // Input buffer: Shared mode for CPU initialization
         gaussianBuffer = device.makeBuffer(bytes: gaussians, length: gaussianSize, options: .storageModeShared)
-        
-        // Intermediate buffers: Private mode (GPU only) for optimization on Apple Silicon
         precalcBuffer = device.makeBuffer(length: precalcSize, options: .storageModePrivate)
         dynamicBuffer = device.makeBuffer(length: dynamicSize, options: .storageModePrivate)
         print("Buffers initialized.")
@@ -183,7 +183,7 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
     }
     
     func setupTexture() {
-        let resolution = max(1, GRID_RESOLUTION)
+        let resolution = max(1, gridResolution)
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .r32Float, // 32-bit float for density precision
             width: resolution,
@@ -196,6 +196,33 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         textureDescriptor.storageMode = .private
         densityTexture = device.makeTexture(descriptor: textureDescriptor)
     }
+
+    func apply(settings newSettings: RendererSettings) {
+        lastCommandBuffer?.waitUntilCompleted()
+        lastCommandBuffer = nil
+        isInitialized = false
+
+        settings = newSettings
+        numDistributions = newSettings.numDistributions
+        gridResolution = newSettings.gridResolution
+        gridMin = newSettings.gridMin
+        gridMax = newSettings.gridMax
+        visualizationConfig = VisualizationConfig(
+            colormapIndex: newSettings.colormap.rawValue,
+            invert: newSettings.invertColormap ? 1 : 0,
+            logScale: newSettings.useLogScale ? 1 : 0,
+            colorLevels: newSettings.colorLevels,
+            densityMin: newSettings.densityMin,
+            densityMax: newSettings.densityMax,
+            outlineWidth: newSettings.outlineWidth
+        )
+
+        currentOffset = max(min(currentOffset, gridMax), gridMin)
+        setupMetal()
+        generateData()
+        setupTexture()
+        runInitialPrecalculation()
+    }
     
     // MARK: - Initialization Kernel Execution
     
@@ -206,7 +233,7 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeCommandEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         
-        runComputeKernel(encoder: computeCommandEncoder, pipeline: precalcPipeline, count: NUM_DISTRIBUTIONS)
+        runComputeKernel(encoder: computeCommandEncoder, pipeline: precalcPipeline, count: numDistributions)
         
         computeCommandEncoder.endEncoding()
         commandBuffer.commit()
@@ -225,7 +252,7 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
     // The main rendering loop (Called continuously by MTKView)
     func draw(in view: MTKView) {
         // Do not start the main loop until initialization is finished
-        if !isInitialized { return }
+        if !isInitialized || isExporting { return }
         
         let startTime = CACurrentMediaTime()
 
@@ -237,7 +264,7 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         // MARK: Compute Pass
         if let computeCommandEncoder = commandBuffer.makeComputeCommandEncoder() {
             // Kernel 2: Update Parameters (O(N))
-            runComputeKernel(encoder: computeCommandEncoder, pipeline: updatePipeline, count: NUM_DISTRIBUTIONS)
+            runComputeKernel(encoder: computeCommandEncoder, pipeline: updatePipeline, count: numDistributions)
             
             // Kernel 3: Evaluation (O(N*G))
             runEvaluationKernel(encoder: computeCommandEncoder)
@@ -265,12 +292,16 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         
         // Measure execution time and update the UI asynchronously
         commandBuffer.addCompletedHandler { [weak self] _ in
+            guard let self else { return }
+            self.lastCommandBuffer = nil
+            let endTime = CACurrentMediaTime()
+            let frameTimeMs = (endTime - startTime) * 1000.0
             DispatchQueue.main.async {
-                let endTime = CACurrentMediaTime()
-                self?.frameTime = (endTime - startTime) * 1000.0 // Convert to ms
+                self.frameTime = frameTimeMs
             }
         }
 
+        lastCommandBuffer = commandBuffer
         commandBuffer.commit()
     }
     
@@ -299,13 +330,35 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         encoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
     }
     
+    // Run compute for a specific plane offset and copy the density into a shared texture for readback
+    func computeSlice(at offset: Float, into readbackTexture: MTLTexture) -> Bool {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return false }
+
+        config.planeOffset = offset
+        if let computeCommandEncoder = commandBuffer.makeComputeCommandEncoder() {
+            runComputeKernel(encoder: computeCommandEncoder, pipeline: updatePipeline, count: numDistributions)
+            runEvaluationKernel(encoder: computeCommandEncoder)
+            computeCommandEncoder.endEncoding()
+        }
+
+        if let blit = commandBuffer.makeBlitCommandEncoder() {
+            let srcSize = MTLSize(width: densityTexture.width, height: densityTexture.height, depth: 1)
+            blit.copy(from: densityTexture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0), sourceSize: srcSize, to: readbackTexture, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+            blit.endEncoding()
+        }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        return true
+    }
+
     // Helper for 2D compute kernel (K3)
     func runEvaluationKernel(encoder: MTLComputeCommandEncoder) {
         encoder.setComputePipelineState(evaluationPipeline)
         setCommonBuffers(encoder: encoder)
         encoder.setTexture(densityTexture, index: 0)
         
-        let resolution = max(1, GRID_RESOLUTION)
+        let resolution = max(1, gridResolution)
         let gridSize = MTLSize(width: resolution, height: resolution, depth: 1)
         
         // Determine optimal 2D thread group size
@@ -347,5 +400,17 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         
         // Construct rotation matrix (rows are u, v, n)
         return simd_float3x3(rows: [u, v, n_norm])
+    }
+
+    // Expose current local axes based on the active plane normal
+    var axesUVN: (u: SIMD3<Float>, v: SIMD3<Float>, n: SIMD3<Float>) {
+        let R = MetalRenderer.getRotationMatrix(normal: settings.planeNormal)
+        // R was constructed with rows [u, v, n]
+        // Simd matrices are column-major; there isn't direct row access, so reconstruct
+        // u = row 0 = (R[0][0], R[1][0], R[2][0])
+        let u = SIMD3<Float>(R[0][0], R[1][0], R[2][0])
+        let v = SIMD3<Float>(R[0][1], R[1][1], R[2][1])
+        let n = SIMD3<Float>(R[0][2], R[1][2], R[2][2])
+        return (u, v, n)
     }
 }
