@@ -14,3 +14,7 @@ DerivedData/
 
 # SwiftPM package manager caches
 .swiftpm/
+
+
+# Cargo debug
+target/debug/
