@@ -1,0 +1,15 @@
+[package]
+name = "slicer_core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Gaussian Slicer core domain logic shared across frontends."
+
+[dependencies]
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

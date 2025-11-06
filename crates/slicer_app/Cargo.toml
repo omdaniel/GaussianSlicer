@@ -1,0 +1,20 @@
+[package]
+name = "slicer_app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Egui + winit application shell for the Gaussian Slicer port."
+
+[dependencies]
+anyhow = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+egui-winit = { workspace = true }
+pollster = { workspace = true }
+slicer_core = { path = "../slicer_core" }
+slicer_gfx = { path = "../slicer_gfx" }
+slicer_shaders = { path = "../slicer_shaders" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+winit = { workspace = true }
+glam = { workspace = true }

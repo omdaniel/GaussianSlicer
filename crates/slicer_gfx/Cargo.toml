@@ -1,0 +1,18 @@
+[package]
+name = "slicer_gfx"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "wgpu-based rendering and compute pipelines for Gaussian Slicer."
+
+[dependencies]
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+log = { workspace = true }
+slicer_core = { path = "../slicer_core" }
+slicer_shaders = { path = "../slicer_shaders" }
+tracing = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
