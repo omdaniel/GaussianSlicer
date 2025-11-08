@@ -88,4 +88,40 @@ Once `cov_prime` matches, rerun the dumps to confirm `sigma_n_n` > 0 for every G
 
 ---
 
+## Handoff Snapshot — 2025‑11‑08 08:35 EST
+
+### What’s currently in-flight
+- Host-side structs already enforce an 80 B `Gaussian3D` stride (see `crates/slicer_core/src/gpu.rs`), but the accompanying WGSL rewrite from `gs_wgsl_parity_patch.diff` has **not** been applied yet. Both `precalculate.wgsl` and `update_params.wgsl` still rely on row-assembled rotation matrices.
+- `Config.rotation_matrix` is being populated with *column* data, while the shader interprets it as rows (`slice_to_world_matrix` transposes manually). This mismatch is the primary suspect for the incorrect `cov_prime` third column.
+- Latest dumps live under `tmp/` (see `git status`); keep them for reference before rerunning tests.
+
+### Immediate next steps for the next agent
+1. **Review and apply `gs_wgsl_parity_patch.diff`.**  
+   - The patch modernizes `Gaussian3D`, rewrites K1/K2 to use explicit matrix multiplications (`W2S * Σ * W2Sᵀ`), and adds the Schur complement guard rails described above.  
+   - Apply the patch incrementally (e.g., `patch -p1 < gs_wgsl_parity_patch.diff` or cherry‑pick the relevant hunks) and run `cargo fmt`.
+2. **Regenerate GPU dumps after each atomic edit.**  
+   ```
+   cargo run -p slicer_app -- --gaussian-ply=$(pwd)/assets/examples/gaussian_triplet.ply \
+     --dump-precalc-debug-raw=tmp/precalc_debug.raw \
+     --dump-precalc-raw=tmp/precalc.raw \
+     --dump-dynamic-raw=tmp/dynamic.raw \
+     --dump-density-raw=tmp/density.raw \
+     --exit-after-ms=2000
+   ```
+   - Keep old dumps for comparison (rename before rerunning).
+3. **CPU vs GPU comparison script.**  
+   - Implement `scripts/compare_cov_debug.py` that rebuilds `cov_prime` on the CPU using the same config and reports `max_abs_diff` per Gaussian vs `tmp/precalc_debug.raw`.  
+   - Target tolerance: ≤ 1e‑6 after the WGSL fix. Fail the script if exceeded.
+4. **Document each test loop.**  
+   - After every successful pass (patch apply → cargo run → comparison script), append findings to this log so future agents see the progression.
+
+### Known blockers to mention if reassigned
+- `sigma_n_n` still collapses to zero for anisotropic Gaussians until the rotation uniform semantics are corrected.
+- Density PNGs are still single-color because K2/K3 short-circuit when `cov_prime[2].z ≤ 0`.
+- CI/tests do not yet cover any of this; manual loops (`cargo run` + Python diff) are required for now.
+
+Keep this section updated as soon as a major checkpoint is reached so the next agent can resume without rediscovering the same alignment issues.
+
+---
+
 _Last updated: 2025‑11‑08 by WGSL parity investigation._

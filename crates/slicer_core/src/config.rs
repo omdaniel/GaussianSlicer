@@ -207,9 +207,9 @@ impl VisualizationConfig {
 
 fn mat3_to_padded_columns(m: Mat3) -> [[Scalar; 4]; 4] {
     [
-        [m.row(0).x, m.row(0).y, m.row(0).z, 0.0],
-        [m.row(1).x, m.row(1).y, m.row(1).z, 0.0],
-        [m.row(2).x, m.row(2).y, m.row(2).z, 0.0],
+        [m.col(0).x, m.col(0).y, m.col(0).z, 0.0],
+        [m.col(1).x, m.col(1).y, m.col(1).z, 0.0],
+        [m.col(2).x, m.col(2).y, m.col(2).z, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     ]
 }

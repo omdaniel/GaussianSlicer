@@ -14,6 +14,8 @@ pub struct Gaussian3D {
     pub _pad: [Scalar; 3],
 }
 
+const _: () = assert!(core::mem::size_of::<Gaussian3D>() == 80);
+
 impl Gaussian3D {
     pub fn from_components(mean: Vec3, covariance: Mat3, weight: Scalar) -> Self {
         Self {
