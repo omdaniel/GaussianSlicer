@@ -4,6 +4,7 @@ import Foundation
 import MetalKit
 import simd
 import Darwin
+import AppKit
 
 // Configuration structure matching the Metal shader definition
 struct Config {
@@ -52,6 +53,8 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
     // Output
     var densityTexture: MTLTexture!
     private var lastCommandBuffer: MTLCommandBuffer?
+    private var captureFrameURL: URL?
+    private var captureTexture: MTLTexture?
 
     // State
     @Published var currentOffset: Float = 0.0
@@ -59,6 +62,7 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
     var isInitialized = false
     private let initializationTimeoutSeconds: TimeInterval = 10.0
     @Published var isExporting = false
+    private let gaussianPlyURL: URL?
 
     init(device: MTLDevice, settings: RendererSettings) {
         self.device = device
@@ -78,6 +82,9 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
             densityMax: settings.densityMax,
             outlineWidth: settings.outlineWidth
         )
+        gaussianPlyURL = RuntimeConfig.shared.gaussianPlyURL
+
+        captureFrameURL = RuntimeConfig.shared.captureFrameURL
 
         super.init()
 
@@ -118,23 +125,49 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
     }
     
     func generateData() {
-        print("Generating \(numDistributions) distributions...")
         let startTime = CACurrentMediaTime()
-        let (gaussians, seed) = GMMGenerator.generate(
-            count: numDistributions,
-            meanStdDev: settings.meanStdDev,
-            covarianceScale: settings.covarianceScale,
-            seed: settings.seed
-        )
-        let endTime = CACurrentMediaTime()
-        print("Data generation time: \(String(format: "%.4f", endTime - startTime))s (seed: \(seed))")
+        let gaussianData: [Gaussian3D]
+        var generationNote = ""
 
-        
-        let gaussianSize = MemoryLayout<Gaussian3D>.stride * numDistributions
-        let precalcSize = MemoryLayout<PrecalculatedParams>.stride * numDistributions
-        let dynamicSize = MemoryLayout<DynamicParams>.stride * numDistributions
-        
-        gaussianBuffer = device.makeBuffer(bytes: gaussians, length: gaussianSize, options: .storageModeShared)
+        if let plyURL = gaussianPlyURL {
+            do {
+                gaussianData = try GaussianSplatPLY.load(url: plyURL)
+                print("Loaded \(gaussianData.count) Gaussian splats from \(plyURL.path)")
+            } catch {
+                print("Failed to load Gaussian PLY '\(plyURL.path)': \(error). Falling back to procedural generation.")
+                let (generated, seed) = GMMGenerator.generate(
+                    count: settings.numDistributions,
+                    meanStdDev: settings.meanStdDev,
+                    covarianceScale: settings.covarianceScale,
+                    seed: settings.seed
+                )
+                gaussianData = generated
+                generationNote = " (seed: \(seed))"
+            }
+        } else {
+            let (generated, seed) = GMMGenerator.generate(
+                count: numDistributions,
+                meanStdDev: settings.meanStdDev,
+                covarianceScale: settings.covarianceScale,
+                seed: settings.seed
+            )
+            gaussianData = generated
+            generationNote = " (seed: \(seed))"
+        }
+
+        numDistributions = gaussianData.count
+        settings.numDistributions = gaussianData.count
+        config.numDistributions = UInt32(max(0, min(numDistributions, Int(UInt32.max))))
+
+        let endTime = CACurrentMediaTime()
+        let elapsed = endTime - startTime
+        print("Data preparation time: \(String(format: "%.4f", elapsed))s\(generationNote)")
+
+        let gaussianSize = MemoryLayout<Gaussian3D>.stride * gaussianData.count
+        let precalcSize = MemoryLayout<PrecalculatedParams>.stride * gaussianData.count
+        let dynamicSize = MemoryLayout<DynamicParams>.stride * gaussianData.count
+
+        gaussianBuffer = device.makeBuffer(bytes: gaussianData, length: gaussianSize, options: .storageModeShared)
         precalcBuffer = device.makeBuffer(length: precalcSize, options: .storageModePrivate)
         dynamicBuffer = device.makeBuffer(length: dynamicSize, options: .storageModePrivate)
         print("Buffers initialized.")
@@ -203,7 +236,11 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         isInitialized = false
 
         settings = newSettings
-        numDistributions = newSettings.numDistributions
+        if gaussianPlyURL == nil {
+            numDistributions = newSettings.numDistributions
+        } else {
+            settings.numDistributions = numDistributions
+        }
         gridResolution = newSettings.gridResolution
         gridMin = newSettings.gridMin
         gridMax = newSettings.gridMax
@@ -275,19 +312,12 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         // MARK: Render Pass (Visualization)
         if let renderPassDescriptor = view.currentRenderPassDescriptor,
            let drawable = view.currentDrawable {
-            
-            if let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
-                renderEncoder.setRenderPipelineState(renderPipeline)
-                // Pass the computed density texture to the fragment shader
-                renderEncoder.setFragmentTexture(densityTexture, index: 0)
-                var vizConfig = visualizationConfig
-                renderEncoder.setFragmentBytes(&vizConfig, length: MemoryLayout<VisualizationConfig>.stride, index: 0)
-                // Draw a full-screen quad (6 vertices, 2 triangles)
-                renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
-                renderEncoder.endEncoding()
-            }
-            // Present the final visualization
+            encodeVisualization(renderPassDescriptor, commandBuffer: commandBuffer)
             commandBuffer.present(drawable)
+        }
+
+        if let captureURL = captureFrameURL {
+            encodeCapturePass(commandBuffer: commandBuffer, url: captureURL)
         }
         
         // Measure execution time and update the UI asynchronously
@@ -314,6 +344,91 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         encoder.setBuffer(gaussianBuffer, offset: 0, index: 1)
         encoder.setBuffer(precalcBuffer, offset: 0, index: 2)
         encoder.setBuffer(dynamicBuffer, offset: 0, index: 3)
+    }
+
+    private func encodeVisualization(_ descriptor: MTLRenderPassDescriptor, commandBuffer: MTLCommandBuffer) {
+        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+        renderEncoder.setRenderPipelineState(renderPipeline)
+        renderEncoder.setFragmentTexture(densityTexture, index: 0)
+        var vizConfig = visualizationConfig
+        renderEncoder.setFragmentBytes(&vizConfig, length: MemoryLayout<VisualizationConfig>.stride, index: 0)
+        renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        renderEncoder.endEncoding()
+    }
+
+    private func encodeCapturePass(commandBuffer: MTLCommandBuffer, url: URL) {
+        let resolution = gridResolution
+        guard let texture = ensureCaptureTexture(resolution: resolution) else { return }
+        let descriptor = MTLRenderPassDescriptor()
+        descriptor.colorAttachments[0].texture = texture
+        descriptor.colorAttachments[0].loadAction = .clear
+        descriptor.colorAttachments[0].storeAction = .store
+        descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0)
+        encodeVisualization(descriptor, commandBuffer: commandBuffer)
+        commandBuffer.addCompletedHandler { [weak self] _ in
+            self?.writeCaptureTexture(texture: texture, resolution: resolution, url: url)
+        }
+    }
+
+    private func ensureCaptureTexture(resolution: Int) -> MTLTexture? {
+        if let texture = captureTexture,
+           texture.width == resolution,
+           texture.height == resolution {
+            return texture
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: resolution, height: resolution, mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .shared
+        captureTexture = device.makeTexture(descriptor: descriptor)
+        return captureTexture
+    }
+
+    private func writeCaptureTexture(texture: MTLTexture, resolution: Int, url: URL) {
+        let bytesPerPixel = 4
+        let bytesPerRow = bytesPerPixel * resolution
+        var data = Data(count: bytesPerRow * resolution)
+        data.withUnsafeMutableBytes { ptr in
+            guard let baseAddress = ptr.baseAddress else { return }
+            let region = MTLRegionMake2D(0, 0, resolution, resolution)
+            texture.getBytes(baseAddress, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
+        }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let alphaInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
+        let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(CGBitmapInfo(rawValue: alphaInfo))
+        guard let provider = CGDataProvider(data: data as CFData),
+              let cgImage = CGImage(
+                  width: resolution,
+                  height: resolution,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: bytesPerRow,
+                  space: colorSpace,
+                  bitmapInfo: bitmapInfo,
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: false,
+                  intent: .defaultIntent
+              ) else {
+            print("Failed to create capture CGImage")
+            return
+        }
+
+        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
+        guard let pngData = bitmapRep.representation(using: NSBitmapImageRep.FileType.png, properties: [:]) else {
+            print("Failed to encode capture PNG")
+            return
+        }
+
+        do {
+            try pngData.write(to: url)
+            captureFrameURL = nil
+            DispatchQueue.main.async {
+                exit(EXIT_SUCCESS)
+            }
+        } catch {
+            print("Failed to save capture: \(error)")
+        }
     }
 
     // Helper for 1D compute kernels (K1, K2)

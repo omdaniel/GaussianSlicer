@@ -9,6 +9,7 @@ pub mod config;
 pub mod gmm;
 pub mod gpu;
 pub mod metrics;
+pub mod ply;
 
 /// Convenience re-export for the scalar type used across the slicer.
 pub type Scalar = f32;
@@ -19,3 +20,4 @@ pub fn version_string() -> &'static str {
 }
 
 pub use gpu::{DynamicParams, Gaussian3D, PrecalculatedParams};
+pub use ply::load_gaussians_from_ply;

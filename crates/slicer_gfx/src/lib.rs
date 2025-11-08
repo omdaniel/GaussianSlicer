@@ -40,6 +40,9 @@ pub struct ShaderModules {
     pub visualize: wgpu::ShaderModule,
 }
 
+const CONFIG_UNIFORM_SIZE: u64 = 256;
+const COV_DEBUG_STRIDE: u64 = 48;
+
 /// Entry point for creating a GPU context and loading shader modules.
 pub async fn init(window: &Window) -> Result<(GpuContext<'_>, ShaderModules)> {
     let instance_desc = InstanceDescriptor {
@@ -84,7 +87,7 @@ pub async fn init(window: &Window) -> Result<(GpuContext<'_>, ShaderModules)> {
         .unwrap_or(wgpu::CompositeAlphaMode::Auto);
 
     let surface_config = SurfaceConfiguration {
-        usage: TextureUsages::RENDER_ATTACHMENT,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
         format: surface_format,
         width: size.width.max(1),
         height: size.height.max(1),
@@ -149,6 +152,7 @@ pub fn create_pipeline_layouts(device: &Device) -> PipelineLayouts {
             buffer_entry(0, BufferBindingType::Uniform),
             buffer_entry(1, BufferBindingType::Storage { read_only: true }),
             buffer_entry(2, BufferBindingType::Storage { read_only: false }),
+            buffer_entry(3, BufferBindingType::Storage { read_only: false }),
         ],
     });
 
@@ -241,6 +245,10 @@ pub struct RendererResources {
     pub density_view: TextureView,
     pub sampler: wgpu::Sampler,
     pub visualization_config: VisualizationConfig,
+    gaussian_buffer_size: u64,
+    precalc_buffer_size: u64,
+    dynamic_buffer_size: u64,
+    precalc_debug_buffer_size: u64,
     dispatch: DispatchCounts,
 }
 
@@ -266,6 +274,7 @@ pub struct Buffers {
     pub gaussians: wgpu::Buffer,
     pub precalc: wgpu::Buffer,
     pub dynamic: wgpu::Buffer,
+    pub precalc_debug: wgpu::Buffer,
     pub visualization: wgpu::Buffer,
 }
 
@@ -294,11 +303,10 @@ impl RendererResources {
         let kernel_config = settings.kernel_config();
         let visualization_config = VisualizationConfig::from_settings(settings);
 
-        const CONFIG_UNIFORM_SIZE: u64 = 256;
         let kernel_config_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("KernelConfig Uniform"),
             size: CONFIG_UNIFORM_SIZE,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         queue.write_buffer(&kernel_config_buffer, 0, bytes_of(&kernel_config));
@@ -309,7 +317,7 @@ impl RendererResources {
                 &device,
                 "Gaussian Buffer",
                 gaussians,
-                BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             ),
             precalc: create_storage_buffer(
                 &device,
@@ -323,12 +331,23 @@ impl RendererResources {
                 &vec![DynamicParams::zeroed(); gaussians.len()],
                 BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
             ),
+            precalc_debug: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Precalc Debug Buffer"),
+                size: (gaussians.len().max(1) as u64) * COV_DEBUG_STRIDE,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
             visualization: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("VisualizationConfig Uniform"),
                 contents: bytes_of(&visualization_config),
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             }),
         };
+        let element_count = gaussians.len().max(1);
+        let gaussian_buffer_size = (element_count * size_of::<Gaussian3D>()) as u64;
+        let precalc_buffer_size = (element_count * size_of::<PrecalculatedParams>()) as u64;
+        let dynamic_buffer_size = (element_count * size_of::<DynamicParams>()) as u64;
+        let precalc_debug_buffer_size = element_count as u64 * COV_DEBUG_STRIDE;
 
         let density_texture = create_density_texture(&device, settings.grid_resolution);
         let density_view = density_texture.create_view(&TextureViewDescriptor::default());
@@ -374,6 +393,10 @@ impl RendererResources {
                     BindGroupEntry {
                         binding: 2,
                         resource: buffers.precalc.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 3,
+                        resource: buffers.precalc_debug.as_entire_binding(),
                     },
                 ],
             }),
@@ -442,6 +465,10 @@ impl RendererResources {
             density_view,
             sampler,
             visualization_config,
+            gaussian_buffer_size,
+            precalc_buffer_size,
+            dynamic_buffer_size,
+            precalc_debug_buffer_size,
             dispatch,
         })
     }
@@ -526,6 +553,50 @@ impl RendererResources {
 
     pub fn density_texture_view(&self) -> &TextureView {
         &self.density_view
+    }
+
+    pub fn density_texture(&self) -> &Texture {
+        &self.density_texture
+    }
+
+    pub fn gaussians_buffer(&self) -> &wgpu::Buffer {
+        &self.buffers.gaussians
+    }
+
+    pub fn gaussians_buffer_size(&self) -> u64 {
+        self.gaussian_buffer_size
+    }
+
+    pub fn precalc_buffer(&self) -> &wgpu::Buffer {
+        &self.buffers.precalc
+    }
+
+    pub fn precalc_buffer_size(&self) -> u64 {
+        self.precalc_buffer_size
+    }
+
+    pub fn dynamic_buffer(&self) -> &wgpu::Buffer {
+        &self.buffers.dynamic
+    }
+
+    pub fn dynamic_buffer_size(&self) -> u64 {
+        self.dynamic_buffer_size
+    }
+
+    pub fn precalc_debug_buffer(&self) -> &wgpu::Buffer {
+        &self.buffers.precalc_debug
+    }
+
+    pub fn precalc_debug_buffer_size(&self) -> u64 {
+        self.precalc_debug_buffer_size
+    }
+
+    pub fn kernel_config_buffer(&self) -> &wgpu::Buffer {
+        &self.buffers.kernel_config
+    }
+
+    pub fn kernel_config_buffer_size(&self) -> u64 {
+        CONFIG_UNIFORM_SIZE
     }
 
     pub fn sampler(&self) -> &wgpu::Sampler {

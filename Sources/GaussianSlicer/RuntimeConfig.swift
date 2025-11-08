@@ -33,6 +33,8 @@ struct RuntimeConfig {
     let colorLevels: UInt32
     let outlineWidth: Float
     let shouldExit: Bool
+    let gaussianPlyURL: URL?
+    let captureFrameURL: URL?
 
     private init() {
         let defaultPlaneNormal = SIMD3<Float>(1.0, 0.5, 0.8)
@@ -52,6 +54,8 @@ struct RuntimeConfig {
         var colorLevels: UInt32 = 0
         var outlineWidth: Float = 0.0
         var shouldExit = false
+        var gaussianPlyURL: URL? = nil
+        var captureFrameURL: URL? = nil
 
         for argument in CommandLine.arguments.dropFirst() {
             guard argument.hasPrefix("--") else { continue }
@@ -145,6 +149,14 @@ struct RuntimeConfig {
                 if let value, let parsed = Float(value), parsed >= 0 {
                     outlineWidth = parsed
                 }
+            case "gaussian-ply":
+                if let value {
+                    gaussianPlyURL = URL(fileURLWithPath: value).standardizedFileURL
+                }
+            case "capture-frame":
+                if let value {
+                    captureFrameURL = URL(fileURLWithPath: value).standardizedFileURL
+                }
             default:
                 print("Warning: Unrecognized option '--\(key)'. Use --help for available flags.")
             }
@@ -182,6 +194,8 @@ struct RuntimeConfig {
         self.outlineWidth = outlineWidth
         self.shouldExit = shouldExit
         self.planeNormal = simd_normalize(planeNormal)
+        self.gaussianPlyURL = gaussianPlyURL
+        self.captureFrameURL = captureFrameURL
     }
 
     private static func printHelp() {
@@ -203,6 +217,8 @@ struct RuntimeConfig {
           --density-max=FLOAT         Maximum density for color mapping (default: 0.05).
           --color-levels=INT          Number of discrete color bands (0 = continuous).
           --outline-width=FLOAT       Width of band outlines in points (0 = off).
+          --gaussian-ply=PATH         Load Gaussian mixture data from a Gaussian splat PLY file.
+          --capture-frame=PATH        Render the visualization to a PNG at grid resolution and exit.
         """
         print(message)
     }

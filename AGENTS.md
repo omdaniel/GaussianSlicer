@@ -65,3 +65,13 @@ This workflow validates that the generated Swift Package Manager (SwiftPM) proje
 ## Success Criteria
 
 The validation is successful if all steps complete without error (exit code 0), confirming successful compilation of the Swift and Metal code.
+
+## Optional Runtime Parity Check (Gaussian Splat PLY)
+
+After a successful build you can launch the macOS app against the shared-test Gaussian splat file that both the Swift and Rust ports now understand. This is useful for visual parity investigations:
+
+```bash
+swift run GaussianSlicer --gaussian-ply="$(pwd)/assets/examples/gaussian_triplet.ply"
+```
+
+The tiny scene in `assets/examples/gaussian_triplet.ply` contains three Gaussians with different scales/orientations, making it quick to confirm that UI controls and visualization defaults match the Rust/wgpu frontend (`cargo run -p slicer_app -- --gaussian-ply=assets/examples/gaussian_triplet.ply`).

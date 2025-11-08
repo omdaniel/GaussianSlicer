@@ -10,6 +10,7 @@
 - **GPU Runtime (M3):** `slicer_gfx` provisions K1 → K3 compute pipelines plus the fullscreen visualization pass, managing buffers/bind groups for the translated kernels.
 - **UI Shell (M4 kick-off):** `slicer_app` now runs a winit + egui loop, dispatches the compute passes every frame, and displays the density texture with interactive visualization controls.
 - **Red/Green Loop:** `tools/red_green_cycle.sh` automates `cargo check`, `cargo test`, and a short `slicer_app` smoke-run (`--exit-after-ms`) so agents can iterate quickly and capture runtime validation errors.
+- **Shared Dataset Import:** Both host apps ingest Gaussian Splat PLY files via `--gaussian-ply=PATH`, so Swift/Metal and Rust/wgpu can slice the exact same mixtures.
 - **Outstanding Milestones:** Export/readback flows, full UI parity, and CI packaging (M4–M6) remain open; next focus is adding staging-buffer exports and broader settings coverage.
 
 ## 0) TL;DR
@@ -78,6 +79,17 @@ repo/
 | Function constants | (avoid) or push constants (backend‑guarded) | prefer uniforms |
 
 **Clip/NDC:** Normalize Y flip + depth range in `slicer_gfx` so visuals match Metal.
+
+---
+
+## Shared Gaussian Dataset Import (PLY)
+- Launch either host with `--gaussian-ply=/absolute/path/to/scene.ply` to bypass the procedural generator and feed both pipelines the same Gaussian mixture.
+  - SwiftUI app: `swift run GaussianSlicer --gaussian-ply=/path/...`.
+  - Rust/wgpu shell: `cargo run -p slicer_app -- --gaussian-ply=/path/...`.
+- Expected vertex schema matches the Inria Gaussian Splatting exporter: `x/y/z`, `scale_0..2` (log-space principal axes), `rot_0..3` (quaternion xyzw), and an optional `opacity`/`alpha`/`weight` column. All other properties (SH colors, normals, etc.) are ignored.
+- Loader behavior mirrors across languages: clamped exponentiation of scales (|value|≤16), covariance built via `cov = R · diag(σ²) · Rᵀ`, quaternion normalization with identity fallback, and automatic weight normalization so ∑w = 1.
+- A tiny smoke-scene lives at `assets/examples/gaussian_triplet.ply`; use it for quick parity checks: `cargo run -p slicer_app -- --gaussian-ply=assets/examples/gaussian_triplet.ply`.
+- While a PLY override is active, generator sliders remain visible but no longer mutate the dataset; plane/grid/visualization controls continue to operate in both apps for parity inspection.
 
 ---
 

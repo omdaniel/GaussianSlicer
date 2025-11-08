@@ -1,0 +1,19 @@
+ply
+format ascii 1.0
+comment Minimal Gaussian splat sample for parity smoke tests
+element vertex 3
+property float x
+property float y
+property float z
+property float opacity
+property float scale_0
+property float scale_1
+property float scale_2
+property float rot_0
+property float rot_1
+property float rot_2
+property float rot_3
+end_header
+0.0 0.0 0.0 0.5 -0.6931472 -0.6931472 -0.6931472 0.0 0.0 0.0 1.0
+2.0 0.0 1.0 1.0 -1.2039728 -0.6931472 -0.35667497 0.0 0.0 0.0 1.0
+-1.5 1.2 -0.5 0.8 -0.5108256 -0.9162907 -0.22314353 0.38268343 0.0 0.0 0.9238795
