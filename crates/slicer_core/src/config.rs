@@ -56,9 +56,8 @@ impl RendererSettings {
         );
         let rotation = self.rotation_matrix();
         KernelConfig {
-            num_distributions: self.num_distributions,
-            _pad0: [0; 3],
-            rotation_matrix: mat3_to_padded_columns(rotation),
+            num_distributions: [self.num_distributions, 0, 0, 0],
+            rotation_matrix_cols: mat3_to_padded_columns(rotation),
             plane_normal: [
                 self.plane_normal.x,
                 self.plane_normal.y,
@@ -77,9 +76,10 @@ impl RendererSettings {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct KernelConfig {
-    pub num_distributions: u32,
-    pub _pad0: [u32; 3],
-    pub rotation_matrix: [[Scalar; 4]; 4],
+    /// Packed as vec4<u32> to satisfy std140 alignment.
+    pub num_distributions: [u32; 4],
+    /// Slice-to-world basis stored as padded columns (matches WGSL std140 layout).
+    pub rotation_matrix_cols: [[Scalar; 4]; 4],
     pub plane_normal: [Scalar; 4],
     pub grid_params: [Scalar; 4],
     pub _reserved0: [Scalar; 4],
@@ -162,7 +162,7 @@ mod tests {
         let settings = RendererSettings::default();
         let cfg = settings.kernel_config();
 
-        assert_eq!(cfg.num_distributions, settings.num_distributions);
+        assert_eq!(cfg.num_distributions[0], settings.num_distributions);
         assert_eq!(cfg.grid_params[1], settings.grid_min);
         assert_eq!(cfg.grid_params[2], settings.grid_max);
         assert_eq!(cfg.plane_normal[0], settings.plane_normal.x);
@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(cfg._reserved0, [0.0; 4]);
         assert_eq!(cfg._reserved1, [0.0; 4]);
         assert_eq!(cfg._reserved2, [0.0; 4]);
-        assert_eq!(cfg.rotation_matrix[3], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(cfg.rotation_matrix_cols[3], [0.0, 0.0, 0.0, 1.0]);
     }
 }
 

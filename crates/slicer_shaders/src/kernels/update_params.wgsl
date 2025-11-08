@@ -1,7 +1,6 @@
 struct Config {
-    num_distributions: u32,
-    _pad0: vec3<u32>,
-    rotation_matrix: mat4x4<f32>,
+    num_distributions: vec4<u32>,
+    rotation_matrix_cols: array<vec4<f32>, 4>,
     plane_normal: vec4<f32>,
     grid_params: vec4<f32>,
     _reserved0: vec4<f32>,
@@ -43,20 +42,16 @@ const EPSILON: f32 = 1e-6;
 const SQRT_2_PI: f32 = 2.50662827463100050242;
 
 fn slice_to_world_matrix() -> mat3x3<f32> {
-    let row0 = config.rotation_matrix[0].xyz;
-    let row1 = config.rotation_matrix[1].xyz;
-    let row2 = config.rotation_matrix[2].xyz;
-    return mat3x3<f32>(
-        vec3<f32>(row0.x, row1.x, row2.x),
-        vec3<f32>(row0.y, row1.y, row2.y),
-        vec3<f32>(row0.z, row1.z, row2.z),
-    );
+    let col0 = config.rotation_matrix_cols[0].xyz;
+    let col1 = config.rotation_matrix_cols[1].xyz;
+    let col2 = config.rotation_matrix_cols[2].xyz;
+    return mat3x3<f32>(col0, col1, col2);
 }
 
 @compute @workgroup_size(64)
 fn update_params_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
-    if (index >= config.num_distributions) {
+    if (index >= config.num_distributions.x) {
         return;
     }
 

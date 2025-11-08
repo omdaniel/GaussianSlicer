@@ -11,7 +11,8 @@
 - **UI Shell (M4 kick-off):** `slicer_app` now runs a winit + egui loop, dispatches the compute passes every frame, and displays the density texture with interactive visualization controls.
 - **Red/Green Loop:** `tools/red_green_cycle.sh` automates `cargo check`, `cargo test`, and a short `slicer_app` smoke-run (`--exit-after-ms`) so agents can iterate quickly and capture runtime validation errors.
 - **Shared Dataset Import:** Both host apps ingest Gaussian Splat PLY files via `--gaussian-ply=PATH`, so Swift/Metal and Rust/wgpu can slice the exact same mixtures.
-- **Outstanding Milestones:** Export/readback flows, full UI parity, and CI packaging (M4–M6) remain open; next focus is adding staging-buffer exports and broader settings coverage.
+- **Shader Parity Tracking:** `docs/wgsl_parity_log.md` plus `scripts/compare_cov_debug.py` capture the current Metal↔WGSL delta. K1 alignment issues are resolved, density buffers vary correctly, but the covariance change-of-basis still diverges (symmetry error ~6.6e-1). The debug buffer now records rotation columns, world→slice rows, `covariance * slice_to_world`, and per-row dot products so agents can finish the fix.
+- **Outstanding Milestones:** Export/readback flows, full UI parity, shader parity fixes (K1 → K3), and CI packaging (M4–M6) remain open; immediate focus is getting `scripts/compare_cov_debug.py` to pass by correcting the `covariance * slice_to_world` multiply.
 
 ## 0) TL;DR
 - Port to **Rust + wgpu + egui** with the same features and visual output as Swift/Metal.

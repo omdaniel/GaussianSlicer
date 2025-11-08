@@ -1,7 +1,6 @@
 struct Config {
-    num_distributions: u32,
-    _pad0: vec3<u32>,
-    rotation_matrix: mat4x4<f32>,
+    num_distributions: vec4<u32>,
+    rotation_matrix_cols: array<vec4<f32>, 4>,
     plane_normal: vec4<f32>,
     grid_params: vec4<f32>,
     _reserved0: vec4<f32>,
@@ -69,7 +68,7 @@ fn evaluation_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var total_density = 0.0;
 
-    for (var i: u32 = 0u; i < config.num_distributions; i = i + 1u) {
+    for (var i: u32 = 0u; i < config.num_distributions.x; i = i + 1u) {
         let dynamic_entry = dynamic_params[i];
         if (dynamic_entry.combined_factor <= EPSILON) {
             continue;

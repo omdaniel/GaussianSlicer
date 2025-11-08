@@ -1,0 +1,19 @@
+[package]
+name = "parity_lab"
+version = "0.1.0"
+edition = "2021"
+authors = ["Gaussian Slicer Port contributors"]
+license = "MIT OR Apache-2.0"
+description = "Known-good math kernels shared between Metal and WGSL for Gaussian Slicer parity checks"
+
+[dependencies]
+glam = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+bytemuck = { workspace = true }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+anyhow = { workspace = true }
+
+[package.metadata.docs]
+highlight = "See AGENT-PARITYLAB.md for process guidance"

@@ -1,7 +1,6 @@
 struct Config {
-    num_distributions: u32,
-    _pad0: vec3<u32>,
-    rotation_matrix: mat4x4<f32>,
+    num_distributions: vec4<u32>,
+    rotation_matrix_cols: array<vec4<f32>, 4>,
     plane_normal: vec4<f32>,
     grid_params: vec4<f32>,
     _reserved0: vec4<f32>,
@@ -29,10 +28,22 @@ struct PrecalculatedParams {
 };
 
 struct CovarianceDebug {
-    col0: vec4<f32>,
-    col1: vec4<f32>,
-    col2: vec4<f32>,
-}
+    cov_col0: vec4<f32>,
+    cov_col1: vec4<f32>,
+    cov_col2: vec4<f32>,
+    rot_col0: vec4<f32>,
+    rot_col1: vec4<f32>,
+    rot_col2: vec4<f32>,
+    w2s_col0: vec4<f32>,
+    w2s_col1: vec4<f32>,
+    w2s_col2: vec4<f32>,
+    rotw_col0: vec4<f32>,
+    rotw_col1: vec4<f32>,
+    rotw_col2: vec4<f32>,
+    dot_col0: vec4<f32>,
+    dot_col1: vec4<f32>,
+    dot_col2: vec4<f32>,
+};
 
 @group(0) @binding(0) var<uniform> config: Config;
 @group(0) @binding(1) var<storage, read> gaussians: array<Gaussian3D>;
@@ -47,20 +58,16 @@ fn determinant_2x2(col0: vec2<f32>, col1: vec2<f32>) -> f32 {
 }
 
 fn slice_to_world_matrix() -> mat3x3<f32> {
-    let row0 = config.rotation_matrix[0].xyz;
-    let row1 = config.rotation_matrix[1].xyz;
-    let row2 = config.rotation_matrix[2].xyz;
-    return mat3x3<f32>(
-        vec3<f32>(row0.x, row1.x, row2.x),
-        vec3<f32>(row0.y, row1.y, row2.y),
-        vec3<f32>(row0.z, row1.z, row2.z),
-    );
+    let col0 = config.rotation_matrix_cols[0].xyz;
+    let col1 = config.rotation_matrix_cols[1].xyz;
+    let col2 = config.rotation_matrix_cols[2].xyz;
+    return mat3x3<f32>(col0, col1, col2);
 }
 
 @compute @workgroup_size(64)
 fn precalculate_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
-    if (index >= config.num_distributions) {
+    if (index >= config.num_distributions.x) {
         return;
     }
 
@@ -74,11 +81,50 @@ fn precalculate_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
         gaussian.covariance_col2.xyz,
     );
 
-    let cov_prime = world_to_slice * covariance * transpose(world_to_slice);
+    let cov_prime = world_to_slice * covariance * slice_to_world;
 
-    precalc_debug[index].col0 = vec4<f32>(cov_prime[0], 0.0);
-    precalc_debug[index].col1 = vec4<f32>(cov_prime[1], 0.0);
-    precalc_debug[index].col2 = vec4<f32>(cov_prime[2], 0.0);
+    precalc_debug[index].cov_col0 = vec4<f32>(cov_prime[0], 0.0);
+    precalc_debug[index].cov_col1 = vec4<f32>(cov_prime[1], 0.0);
+    precalc_debug[index].cov_col2 = vec4<f32>(cov_prime[2], 0.0);
+    precalc_debug[index].rot_col0 = config.rotation_matrix_cols[0];
+    precalc_debug[index].rot_col1 = config.rotation_matrix_cols[1];
+    precalc_debug[index].rot_col2 = config.rotation_matrix_cols[2];
+    precalc_debug[index].w2s_col0 = vec4<f32>(world_to_slice[0], 0.0);
+    precalc_debug[index].w2s_col1 = vec4<f32>(world_to_slice[1], 0.0);
+    precalc_debug[index].w2s_col2 = vec4<f32>(world_to_slice[2], 0.0);
+
+    let rot_times_cov_col0 = covariance * slice_to_world[0];
+    let rot_times_cov_col1 = covariance * slice_to_world[1];
+    let rot_times_cov_col2 = covariance * slice_to_world[2];
+    precalc_debug[index].rotw_col0 = vec4<f32>(rot_times_cov_col0, 0.0);
+    precalc_debug[index].rotw_col1 = vec4<f32>(rot_times_cov_col1, 0.0);
+    precalc_debug[index].rotw_col2 = vec4<f32>(rot_times_cov_col2, 0.0);
+
+    let w2s_row0 = vec3<f32>(world_to_slice[0][0], world_to_slice[1][0], world_to_slice[2][0]);
+    let w2s_row1 = vec3<f32>(world_to_slice[0][1], world_to_slice[1][1], world_to_slice[2][1]);
+    let w2s_row2 = vec3<f32>(world_to_slice[0][2], world_to_slice[1][2], world_to_slice[2][2]);
+
+    let dot_row0 = vec3<f32>(
+        dot(w2s_row0, rot_times_cov_col0),
+        dot(w2s_row0, rot_times_cov_col1),
+        dot(w2s_row0, rot_times_cov_col2)
+    );
+
+    let dot_row1 = vec3<f32>(
+        dot(w2s_row1, rot_times_cov_col0),
+        dot(w2s_row1, rot_times_cov_col1),
+        dot(w2s_row1, rot_times_cov_col2)
+    );
+
+    let dot_row2 = vec3<f32>(
+        dot(w2s_row2, rot_times_cov_col0),
+        dot(w2s_row2, rot_times_cov_col1),
+        dot(w2s_row2, rot_times_cov_col2)
+    );
+
+    precalc_debug[index].dot_col0 = vec4<f32>(dot_row0, 0.0);
+    precalc_debug[index].dot_col1 = vec4<f32>(dot_row1, 0.0);
+    precalc_debug[index].dot_col2 = vec4<f32>(dot_row2, 0.0);
 
     let cov_uv_col0 = cov_prime[0].xy;
     let cov_uv_col1 = cov_prime[1].xy;

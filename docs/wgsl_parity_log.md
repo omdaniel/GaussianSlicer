@@ -59,6 +59,73 @@ Observations:
 - Verified raw Gaussian storage buffer (`tmp/gaussians.raw`) matches Swift’s data: columns are std430-padded (each column is `[x,y,z,0]`). So the error isn’t in uploading covariance data.
 - Density range dump (`tmp/density.raw`) remains constant (min=max), confirming the compute path still bails out before writing meaningful values.
 
+### 5. Column Packing Verification (Nov 8, 2025)
+- Added `scripts/compare_cov_debug.py` to automate CPU↔WGSL covariance diffs. Example:
+  ```bash
+  cargo run -p slicer_app -- --gaussian-ply=$(pwd)/assets/examples/gaussian_triplet.ply \
+    --dump-gaussians-raw=tmp/gaussians.raw \
+    --dump-precalc-debug-raw=tmp/precalc_debug.raw \
+    --dump-kernel-config-raw=tmp/kernel.raw \
+    --exit-after-ms=2000
+
+  python3 scripts/compare_cov_debug.py \
+    --gaussians tmp/gaussians.raw \
+    --precalc-debug tmp/precalc_debug.raw \
+    --kernel-config tmp/kernel.raw \
+    --tolerance 1e-6
+  ```
+  Output (current build) reports `max_abs_diff ≈ 5.26e-01` with all three Gaussians failing because `cov_prime[2]` is zeroed on the GPU.
+- Host now writes column-aligned matrices via `KernelConfig::rotation_matrix_cols`, and WGSL consumes a matching field.
+- Instrumented `precalc_debug` to stash `world_to_slice[col][2]` in the `.w` component of each column. Those values are `0` for every column, proving the **entire third row of W2S is zero** inside the shader even though the CPU rotation matrix has non-zero normals. In other words, the normal axis never survives the uniform upload, so σₙₙ collapses to 0 and K2 short-circuits.
+- Suspected cause: the mat4/array layout mismatch when mapping the uniform. Reverting the WGSL field type back to `mat4x4<f32>` did **not** fix the zero row, so the issue likely sits elsewhere (possibly in how we rehydrate the matrix on the WGSL side).
+
+➤ **Next debugging steps**
+1. Dump the raw uniform buffer (`tmp/kernel.raw`) and interpret it inside a tiny shader (copy the three columns into `precalc_debug`) to confirm what WGSL actually sees. Right now the evidence suggests column 2 arrives as zero even though the CPU dump shows `[0.7274, 0.3637, 0.5819]`.
+2. If the column truly becomes zero only after the `slice_to_world_matrix()` helper, rewrite that helper without `mat3x3` constructors (build rows manually and skip `transpose`) to rule out Naga/`mat3` semantics.
+3. Once column 2 survives, rerun `compare_cov_debug.py`; success criteria: `max_abs_diff` ≤ 1e-6 so K2 can finally compute σₙₙ > 0.
+
+### 6. Expanded Debug Buffer + Explicit Transpose (Nov 8, 2025 — afternoon)
+- `CovarianceDebug` now stores both `cov_prime` columns and the raw slice basis columns (see `crates/slicer_shaders/src/kernels/precalculate.wgsl:13-24`). The host buffer stride doubled (96 B) via `COV_DEBUG_STRIDE` in `crates/slicer_gfx/src/lib.rs:44`.
+- `scripts/compare_cov_debug.py` understands the new layout and can show the captured basis via `--show-basis`. Current output:
+  ```
+  GPU basis cols: ( 2.83999e-01, -9.31518e-01,  2.27199e-01),
+                  ( 7.27393e-01,  3.63696e-01,  5.81914e-01),
+                  ( 0.00000e+00,  0.00000e+00,  0.00000e+00)
+  ```
+  i.e. column 0 = host column 1, column 1 = host column 2, column 2 = zero. This proves the uniform read is dropping the first column entirely before the transpose even happens.
+- Added an explicit transpose helper in both WGSL kernels (no reliance on `transpose()`), but the basis columns still show the same pattern, so the issue is unequivocally happening when WGSL reads the uniform.
+- **Action item:** investigate why column 0 vanishes. Hypotheses include:
+  1. The uniform struct still maps to std140 differently than expected (the `mat4x4` might need to be declared as `array<vec4<f32>,4>` to prevent driver-side swizzling).
+  2. The CPU buffer write uses `bytes_of(&kernel_config)` where the struct still contains legacy field names; verify that no other code rewrites the uniform with row-packed data (search for `rotation_matrix_cols` assignments).
+  3. Create a micro shader that writes `config.rotation_matrix_cols[n]` straight into an SSBO to see the data before any math touches it.
+
+Until the uniform columns match, `scripts/compare_cov_debug.py` will keep failing with `max_abs_diff ≈ 5.26e-01`.
+
+### 7. std140 Header Alignment Fix (Nov 8, 2025 — evening)
+- Host/WGSL structs now share an explicit std140 header: the first field is a `vec4<u32>` (`KernelConfig::num_distributions` on Rust is `[u32; 4]`, GPU reads it via `config.num_distributions.x`). This removes the hidden padding that previously shifted the rotation matrix columns.
+- `precalc_debug` now mirrors the CPU slice basis exactly:
+  ```
+  GPU basis cols: (-6.24695e-01,  0.00000e+00,  7.80869e-01),
+                  ( 2.83999e-01, -9.31518e-01,  2.27199e-01),
+                  ( 7.27393e-01,  3.63696e-01,  5.81914e-01)
+  ```
+- With the alignment fixed, `sigma_n_n` becomes positive and the density texture finally shows a range (`min=0.0, max≈1.1e-1`). `scripts/compare_cov_debug.py` still reports `max_abs_diff ≈ 6.4e-01`, but the discrepancy now reflects real math differences (change-of-basis math) rather than missing normals.
+- **Next up:** focus purely on K1 math—iterate on the change-of-basis multiply, compare against the CPU oracle after every tweak, and drive the diff below 1e-6 before touching K2/K3 again.
+
+### 8. Full K1 Instrumentation (Nov 8, 2025 — late evening)
+- `CovarianceDebug` now stores, per Gaussian:
+  - `cov_col*`: Σ′ columns in slice space.
+  - `rot_col*`: uniform slice-to-world columns.
+  - `w2s_col*`: world-to-slice columns (transpose of slice-to-world).
+  - `rotw_col*`: the intermediate `covariance * slice_to_world` columns (current implementation).
+  - `dot_col*`: `world_to_slice[row] · rotw_col` (the final Σ′ entries as computed on-GPU).
+- `scripts/compare_cov_debug.py` gained `--show-intermediates` and `--check-symmetry`. It now reports symmetry error (currently ~6.6e-1) and the mismatch between Σ′ and the reconstructed dot rows (currently ~3e-8, meaning the per-row dot accumulation agrees with Σ′).
+- Findings:
+  - The basis columns and world-to-slice rows match the CPU reference exactly.
+  - `rotw_col*` is wrong for anisotropic Gaussians (e.g. expected `[-0.056, 0, 0.382]` but GPU shows `[0.339, -0.156, 0]`). This proves the first multiply is using the wrong operands/order.
+  - Because dot reconstruction matches the stored Σ′, the rest of the kernel is consistent; fixing `covariance * slice_to_world` should automatically restore symmetry and parity.
+- **Action item:** rewrite the intermediate multiply to explicitly compute `covariance * slice_to_world[column]` (column-major multiply) rather than treating the columns as rows. Re-run the dump + oracle loop until `GPU cov*S cols` match the CPU (`cov @ S`). Only then resume the Schur complement work.
+
 ---
 
 ## Persistent Issues

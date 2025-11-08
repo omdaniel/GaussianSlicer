@@ -4,6 +4,7 @@ members = [
     "crates/slicer_gfx",
     "crates/slicer_app",
     "crates/slicer_shaders",
+    "parity_lab",
 ]
 
 [workspace.package]

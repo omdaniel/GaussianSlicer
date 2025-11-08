@@ -41,7 +41,7 @@ pub struct ShaderModules {
 }
 
 const CONFIG_UNIFORM_SIZE: u64 = 256;
-const COV_DEBUG_STRIDE: u64 = 48;
+const COV_DEBUG_STRIDE: u64 = 240;
 
 /// Entry point for creating a GPU context and loading shader modules.
 pub async fn init(window: &Window) -> Result<(GpuContext<'_>, ShaderModules)> {
