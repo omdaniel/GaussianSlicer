@@ -2,7 +2,7 @@
 """
 Compare the WGSL precalc covariance debug buffer against a CPU oracle.
 
-The script reconstructs Σ' = W2S * Σ * W2S^T for every Gaussian and
+The script reconstructs Σ' = W2S * Σ * W2Sᵀ for every Gaussian and
 reports the maximum absolute difference versus the buffer dumped from
 the GPU (`--dump-precalc-debug-raw`). Exit code is non-zero if any
 Gaussian exceeds the requested tolerance.
@@ -11,29 +11,22 @@ Gaussian exceeds the requested tolerance.
 from __future__ import annotations
 
 import argparse
-import struct
 import sys
-from array import array
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
-GAUSSIAN_STRIDE_BYTES = 80
-GAUSSIAN_FLOATS = GAUSSIAN_STRIDE_BYTES // 4  # 20
+from parity_common import (
+    Vec3,
+    compute_precalc_for_gaussian,
+    load_float_array,
+    load_gaussians,
+    load_kernel_config,
+)
+
 COV_DEBUG_STRIDE_BYTES = 240
 COV_DEBUG_FLOATS = COV_DEBUG_STRIDE_BYTES // 4  # 60
-KERNEL_CONFIG_BYTES = 160
 DEFAULT_TOLERANCE = 1e-6
-
-
-Vec3 = Tuple[float, float, float]
-Matrix3 = List[List[float]]  # row-major 3x3
-
-
-@dataclass
-class KernelConfigData:
-    num_distributions: int
-    rotation_columns: Tuple[Vec3, Vec3, Vec3]
 
 
 @dataclass
@@ -43,37 +36,6 @@ class DebugEntry:
     world_to_slice_cols: Tuple[Vec3, Vec3, Vec3]
     cov_times_rot_cols: Tuple[Vec3, Vec3, Vec3]
     dot_rows: Tuple[Vec3, Vec3, Vec3]
-
-
-def load_float_array(path: Path) -> array:
-    data = path.read_bytes()
-    floats = array("f")
-    floats.frombytes(data)
-    if sys.byteorder != "little":
-        floats.byteswap()
-    return floats
-
-
-def load_gaussians(path: Path) -> List[Tuple[Vec3, Tuple[Vec3, Vec3, Vec3]]]:
-    floats = load_float_array(path)
-    if len(floats) % GAUSSIAN_FLOATS != 0:
-        raise ValueError(
-            f"{path} length {len(floats)} floats is not a whole number of Gaussian records"
-        )
-    count = len(floats) // GAUSSIAN_FLOATS
-    gaussians: List[Tuple[Vec3, Tuple[Vec3, Vec3, Vec3]]] = []
-
-    for idx in range(count):
-        base = idx * GAUSSIAN_FLOATS
-        mean = tuple(floats[base : base + 3])  # type: ignore[assignment]
-        cursor = base + 4  # skip mean pad
-        columns: List[Vec3] = []
-        for _ in range(3):
-            col = tuple(floats[cursor : cursor + 3])  # type: ignore[assignment]
-            columns.append(col)
-            cursor += 4  # skip padded w component
-        gaussians.append((mean, (columns[0], columns[1], columns[2])))
-    return gaussians
 
 
 def load_precalc_debug(path: Path, expected: int) -> List[DebugEntry]:
@@ -122,69 +84,16 @@ def load_precalc_debug(path: Path, expected: int) -> List[DebugEntry]:
     return debug_entries
 
 
-def load_kernel_config(path: Path) -> KernelConfigData:
-    data = path.read_bytes()
-    if len(data) < KERNEL_CONFIG_BYTES:
-        raise ValueError(
-            f"{path} is only {len(data)} bytes (need at least {KERNEL_CONFIG_BYTES})"
-        )
-    num_distributions, _, _, _ = struct.unpack_from("<IIII", data, 0)
-    rotation = struct.unpack_from("<16f", data, 16)
-    columns = tuple(
-        (
-            rotation[i + 0],
-            rotation[i + 1],
-            rotation[i + 2],
-        )
-        for i in range(0, 12, 4)
-    )
-    return KernelConfigData(num_distributions=num_distributions, rotation_columns=columns)  # type: ignore[arg-type]
-
-
-def mat_from_columns(cols: Sequence[Vec3]) -> Matrix3:
+def matrix_from_cols(cols: Sequence[Vec3]) -> List[List[float]]:
     return [
         [cols[0][0], cols[1][0], cols[2][0]],
         [cols[0][1], cols[1][1], cols[2][1]],
         [cols[0][2], cols[1][2], cols[2][2]],
     ]
-
-
-def mat_transpose(m: Matrix3) -> Matrix3:
-    return [
-        [m[0][0], m[1][0], m[2][0]],
-        [m[0][1], m[1][1], m[2][1]],
-        [m[0][2], m[1][2], m[2][2]],
-    ]
-
-
-def mat_mul(a: Matrix3, b: Matrix3) -> Matrix3:
-    return [
-        [
-            a[row][0] * b[0][col] + a[row][1] * b[1][col] + a[row][2] * b[2][col]
-            for col in range(3)
-        ]
-        for row in range(3)
-    ]
-
-
-def mat_cols(m: Matrix3) -> Tuple[Vec3, Vec3, Vec3]:
-    return (
-        (m[0][0], m[1][0], m[2][0]),
-        (m[0][1], m[1][1], m[2][1]),
-        (m[0][2], m[1][2], m[2][2]),
-    )
 
 
 def max_abs_diff(a: Sequence[Vec3], b: Sequence[Vec3]) -> float:
     return max(abs(a[c][r] - b[c][r]) for c in range(3) for r in range(3))
-
-
-def matrix_from_cols(cols: Sequence[Vec3]) -> Matrix3:
-    return [
-        [cols[0][0], cols[1][0], cols[2][0]],
-        [cols[0][1], cols[1][1], cols[2][1]],
-        [cols[0][2], cols[1][2], cols[2][2]],
-    ]
 
 
 def max_symmetry_error(cols: Sequence[Vec3]) -> float:
@@ -248,17 +157,11 @@ def main() -> None:
     sample_count = args.limit if args.limit is not None else total
     sample_count = min(sample_count, total)
 
-    s2w = mat_from_columns(kernel.rotation_columns)
-    w2s = mat_transpose(s2w)
-    w2s_t = mat_transpose(w2s)
-
     failures: List[Tuple[int, float, Tuple[Vec3, Vec3, Vec3], Tuple[Vec3, Vec3, Vec3]]] = []
     worst = 0.0
     for idx in range(sample_count):
-        mean, cov_cols = gaussians[idx]
-        cov_world = mat_from_columns(cov_cols)
-        cov_prime = mat_mul(mat_mul(w2s, cov_world), w2s_t)
-        cpu_cols = mat_cols(cov_prime)
+        precalc = compute_precalc_for_gaussian(gaussians[idx], kernel)
+        cpu_cols = precalc.cov_cols
         gpu_cols = debug_entries[idx].cov_cols
         diff = max_abs_diff(cpu_cols, gpu_cols)
         worst = max(worst, diff)

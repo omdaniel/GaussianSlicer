@@ -191,11 +191,7 @@ fn run_spd_set(label: &str, cases: &[Spd3Case], epsilon: f32) -> Result<()> {
         let sol_err = residual.abs().max_element();
         if sol_err > max_solution_err {
             max_solution_err = sol_err;
-            worst_solution = Some((
-                idx,
-                residual.to_array(),
-                gpu_ref.solution.to_array(),
-            ));
+            worst_solution = Some((idx, residual.to_array(), gpu_ref.solution.to_array()));
         }
         let cpu_ref = case.reference_with_epsilon(epsilon);
         let chol_err = max_mat_component_delta(&cpu_ref.chol_lower, &gpu_ref.chol_lower);
@@ -253,7 +249,10 @@ fn max_mat_component_delta(a: &Mat3, b: &Mat3) -> f32 {
 }
 
 fn parse_seed(value: &str) -> Result<u64> {
-    if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
         u64::from_str_radix(hex, 16).context("expected hex literal")
     } else {
         value.parse().context("expected integer seed")

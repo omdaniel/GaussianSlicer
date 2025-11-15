@@ -78,7 +78,7 @@ impl RendererSettings {
 pub struct KernelConfig {
     /// Packed as vec4<u32> to satisfy std140 alignment.
     pub num_distributions: [u32; 4],
-    /// Slice-to-world basis stored as padded columns (matches WGSL std140 layout).
+    /// World-to-slice basis stored as padded columns (matches WGSL std140 layout).
     pub rotation_matrix_cols: [[Scalar; 4]; 4],
     pub plane_normal: [Scalar; 4],
     pub grid_params: [Scalar; 4],
@@ -133,8 +133,10 @@ pub fn rotation_matrix_for_normal(n: Vec3) -> Mat3 {
     let u = u.normalize();
     let v = n_norm.cross(u).normalize();
 
-    // Columns encode the local basis vectors (slice axes in world space).
-    Mat3::from_cols(u, v, n_norm)
+    // Swift's renderer packs the basis rows (world→slice). Mirror that convention so the
+    // kernels can consume the matrix without extra transposes.
+    let slice_to_world = Mat3::from_cols(u, v, n_norm);
+    slice_to_world.transpose()
 }
 
 #[cfg(test)]
@@ -144,17 +146,23 @@ mod tests {
     #[test]
     fn rotation_matrix_aligns_with_normal() {
         let normal = Vec3::new(0.3, -0.5, 1.2).normalize();
-        let basis = rotation_matrix_for_normal(normal);
-        let n_col = basis * Vec3::Z;
+        let world_to_slice = rotation_matrix_for_normal(normal);
+        let slice_to_world = world_to_slice.transpose();
 
-        assert!(n_col.angle_between(normal) < 1e-4);
+        // The normal column in slice→world space should align with the requested normal.
+        let n_axis = slice_to_world * Vec3::Z;
+        assert!(n_axis.angle_between(normal) < 1e-4);
 
-        let u = basis * Vec3::X;
-        let v = basis * Vec3::Y;
-        // Columns must be orthonormal.
+        // Basis vectors remain orthonormal after the transpose.
+        let u = slice_to_world * Vec3::X;
+        let v = slice_to_world * Vec3::Y;
         assert!((u.length() - 1.0).abs() < 1e-4);
         assert!((v.length() - 1.0).abs() < 1e-4);
         assert!(u.dot(v).abs() < 1e-4);
+
+        // Projecting the normal back into slice space should yield (0,0,1).
+        let projected = world_to_slice * normal;
+        assert!((projected - Vec3::Z).length() < 1e-4);
     }
 
     #[test]

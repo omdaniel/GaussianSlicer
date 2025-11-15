@@ -65,15 +65,19 @@ impl PrecalculatedParams {
 pub struct DynamicParams {
     pub mean2d: [Scalar; 2],
     pub combined_factor: Scalar,
-    pub _pad: [Scalar; 3],
+    pub _padding0: Scalar,
+    pub _pad: [Scalar; 4],
 }
+
+const _: () = assert!(core::mem::size_of::<DynamicParams>() == 32);
 
 impl DynamicParams {
     pub fn zeroed() -> Self {
         Self {
             mean2d: [0.0; 2],
             combined_factor: 0.0,
-            _pad: [0.0; 3],
+            _padding0: 0.0,
+            _pad: [0.0; 4],
         }
     }
 }

@@ -124,26 +124,84 @@ Until the uniform columns match, `scripts/compare_cov_debug.py` will keep failin
   - The basis columns and world-to-slice rows match the CPU reference exactly.
   - `rotw_col*` is wrong for anisotropic Gaussians (e.g. expected `[-0.056, 0, 0.382]` but GPU shows `[0.339, -0.156, 0]`). This proves the first multiply is using the wrong operands/order.
   - Because dot reconstruction matches the stored Σ′, the rest of the kernel is consistent; fixing `covariance * slice_to_world` should automatically restore symmetry and parity.
-- **Action item:** rewrite the intermediate multiply to explicitly compute `covariance * slice_to_world[column]` (column-major multiply) rather than treating the columns as rows. Re-run the dump + oracle loop until `GPU cov*S cols` match the CPU (`cov @ S`). Only then resume the Schur complement work.
+### 6. K1 Parity Closure (Nov 14, 2025)
+- `KernelConfig::rotation_matrix_cols` is now packed as **world→slice rows**, mirroring the Swift shader’s `float3x3` layout. WGSL loads the matrix directly without additional transposes, while the CPU oracle multiplies `R_ws * Σ * R_wsᵀ`.
+- `Gaussian3D` on the GPU side now matches the Swift stride exactly (five `vec4<f32>` blocks: mean, three covariance columns, weight/pad). This eliminated the silent aliasing where every Gaussian reused the previous covariance data.
+- `scripts/compare_cov_debug.py` reads the world→slice basis from the kernel dump, rebuilds the CPU change-of-basis, and supports `--check-symmetry`/`--show-intermediates` for deeper inspection.
+- Canonical validation loop:
+  ```bash
+  cargo run -p slicer_app -- \
+    --gaussian-ply=$(pwd)/assets/examples/gaussian_triplet.ply \
+    --dump-gaussians-raw=tmp/gaussians.raw \
+    --dump-precalc-debug-raw=tmp/precalc_debug.raw \
+    --dump-kernel-config-raw=tmp/kernel.raw \
+    --exit-after-ms=2000
+
+  python3 scripts/compare_cov_debug.py \
+    --gaussians tmp/gaussians.raw \
+    --precalc-debug tmp/precalc_debug.raw \
+    --kernel-config tmp/kernel.raw \
+    --tolerance 1e-6 \
+    --check-symmetry
+  ```
+  Output: `max_abs_diff=2.24e-08` (all entries within tolerance, symmetry error ≈ 1e-7). This confirms K1 parity between Swift/Metal and Rust/wgpu for the triplet PLY.
+
+### 7. K2/K3 Tooling Drop (Nov 14, 2025)
+- Added `scripts/parity_common.py`, a shared helper used by all parity scripts to load buffers and re-run the Swift math on CPU.
+- **Dynamic params (K2):** `scripts/compare_dynamic.py` loads the Gaussian dump + kernel config, recomputes conditional means/combined factors, and compares them against `--dump-dynamic-raw`. Example:
+  ```bash
+  python3 scripts/compare_dynamic.py \
+    --gaussians tmp/gaussians.raw \
+    --kernel-config tmp/kernel.raw \
+    --dynamic tmp/dynamic.raw \
+    --tolerance 1e-5 \
+    --top 5
+  ```
+  This script reports per-Gaussian diffs for both `mean2d` and `combined_factor` (currently failing until K2 is fixed).
+- **Density texture (K3):** `scripts/compare_density.py` mirrors the evaluation kernel on CPU and compares the result to `--dump-density-raw`. Supports `--resolution` overrides and `--limit-gaussians` for heavy scenes:
+  ```bash
+  python3 scripts/compare_density.py \
+    --gaussians tmp/gaussians.raw \
+    --kernel-config tmp/kernel.raw \
+    --density tmp/density.raw \
+    --resolution 256 \
+    --tolerance 1e-5
+  ```
+  Outputs max/mean absolute error plus the coordinates of the worst texels so we can zero in on K3 regressions once K2 parity lands.
+
+### 8. Latest Tooling Run (Nov 14, 2025 @ 23:58)
+- `python3 scripts/compare_dynamic.py --gaussians tmp/gaussians.raw --kernel-config tmp/kernel.raw --dynamic tmp/dynamic.raw --tolerance 1e-5 --top 5` now reports `mean diff=1.824e-07` and `combined diff=7.549e-09` (all entries within tolerance).
+- `python3 scripts/compare_density.py --gaussians tmp/gaussians.raw --kernel-config tmp/kernel.raw --density tmp/density.raw --resolution 256 --tolerance 1e-5 --top 5` yields `max_abs_diff=9.558e-08` and `mean_abs_diff=8.393e-10` (all texels within tolerance).
+- Keep these dumps (triplet PLY, 256 grid) around as the new parity baseline; re-run the two scripts after every shader/layout edit to make sure K2/K3 stay green.
+
+### 9. Dynamic Buffer Alignment Fix (Nov 14, 2025 @ 23:55)
+- `DynamicParams` now matches WGSL’s std430 layout explicitly: `(vec2 mean2d)` @ 0 bytes, `combined_factor` @ 8 bytes, `_padding0` f32 @ 12 bytes, and an unused `vec4` pad @ 16 bytes (total 32 bytes per record). This keeps the shader’s implicit 16-byte alignment from trampling the next Gaussian’s data.
+- Host structs (`crates/slicer_core/src/gpu.rs`) gained `_padding0` and `_pad` to mirror the WGSL definition, and the parity tooling (`scripts/parity_common.py`) now treats dynamic dumps as 8 floats per record.
+- Added `cargo test -p slicer_shaders layout_snapshot`, which parses `update_params.wgsl` with `naga`, asserts the struct member offsets (`mean2d=0`, `combined_factor=8`, `_padding0=12`, `_pad=16`), and verifies the total sizes (`Gaussian3D=80`, `PrecalculatedParams=40`, `DynamicParams=32`). Re-run this whenever the WGSL structs change to catch regressions before they hit the GPU.
+
+### 10. Large Scene Validation (Nov 15, 2025 @ 00:15)
+- `slicer_app` now accepts `--num-distributions`, `--grid-resolution`, and `--seed` CLI overrides, so we can deterministically stress-test larger Gaussian sets without editing source.
+- 50 000 procedurally generated gaussians (seed = 1234) @ **256² grid**: `compare_dynamic.py` reports `mean diff=2.185e-06`, `combined diff=3.606e-11`; `compare_density.py --sample-count 4096` hits `max_abs_diff=1.826e-08`, `mean_abs_diff=1.168e-09`.
+- Same gaussians @ **512² grid**: `compare_dynamic.py` unchanged (struct-only), `compare_density.py --sample-count 8192` shows `max_abs_diff=2.214e-08`, `mean_abs_diff=1.105e-09`.
+- Full-grid density diffs for 50 k gaussians are infeasible (O(N·pixels) ≈ 3.3e9 ops), so `compare_density.py` now supports deterministic texel sampling; the sample counts above keep runtime <2 min while still covering thousands of pixels.
+
+### 11. Red/Green Automation (Nov 15, 2025 @ 00:25)
+- `tools/red_green_cycle.sh` now runs the parity loop automatically: the triplet PLY smoke-run emits all dumps, then `compare_dynamic.py` and `compare_density.py` execute (full-grid) before the script reports success. Any shader/layout regression now fails the red/green cycle immediately.
+- `scripts/compare_volume_exports.py` is staged for the upcoming RAW/MHD export parity work—point it at the Swift + Rust exports (with optional voxel sampling) to sanity-check headless volume stacks once the Rust exporter lands.
 
 ---
 
 ## Persistent Issues
-1. **Wrong basis used for covariance projection.** Even after explicitly computing `cov_prime = Rᵀ Σ R`, the third column equals the in-plane columns, so the normal variance collapses. Hypothesis: the “rows” we dot against are still the in-plane axes because WGSL matrices index as column-major and we’re reusing `slice_to_world` both as column and row vectors.
-2. **`sigma_n_n < 0`** for Gaussians 1 & 2. The Schur complement logic (`cov_n_n_val >= EPSILON`) therefore never runs, leaving `inv_cov2d` zero and `combined_factor` zero.
-3. **No density variation** in `tmp/density.raw` (min= max) → render pass samples a uniform texture and ends up with a single color PNG.
+1. **Need broader datasets.** Coverage now includes a deterministic 50 k‑Gaussian procedural scene at 256²/512², but we still need to ingest production PLYs and extreme grid sizes (>768²) to watch for precision issues.
+2. **Automation/CI still limited.** The red/green cycle now catches triplet regressions locally, but CI still ignores the parity scripts and large-scene runs—wire the sampled checks into CI so failures show up without manual intervention.
+3. **Export/readback tooling untouched.** The export/readback milestones (M4–M6) still lack validation; once we trust K2/K3, replicate the same numeric diff strategy for the headless export path so CPU/GPU volumes match before wiring UI/UX polish.
 
 ---
 
 ## Suggested Next Paths
-1. **Derive proper row vectors explicitly.** Instead of reusing `slice_to_world[0].x` etc., compute `world_to_slice = transpose(slice_to_world)` once and use its rows when projecting both means and covariances. The current manual dot-product probably mixes up rows/columns.
-2. **Cross-validate with CPU script.** Since `tmp/precalc_debug.raw` and `tmp/gaussians.raw` are available, write a quick script (`scripts/compare_cov_debug.py`) that:
-   - Rebuilds the CPU `cov_prime` using the same basis.
-   - Prints the per-element delta vs `precalc_debug`.
-   - This will pinpoint whether only the third column is wrong or the whole matrix is rotated.
-3. **Unit-test the basis math.** Add a Rust test in `slicer_core` that compares `rotation_matrix_for_normal` against the WGSL `build_slice_basis` by exporting its output (e.g., via pushing the basis into a debug buffer). Ensures both stacks agree on column ordering.
-
-Once `cov_prime` matches, rerun the dumps to confirm `sigma_n_n` > 0 for every Gaussian, then resume the PNG capture comparison.
+1. **Scale the parity set.** Run the dump+compare loop against a dense PLY (≥50 k gaussians) and multiple grid resolutions to ensure the 32 B dynamic stride and density path hold up; log the new diffs here.
+2. **Automate the loop.** Extend `tools/red_green_cycle.sh` (or add a sibling script) to run `compare_dynamic.py` + `compare_density.py` after `cargo run`, so regressions trip locally before CI.
+3. **Plan CI/export coverage.** Reuse the diff tooling for headless exports/readbacks (M4–M6) and wire the parity scripts into CI once we have a headless dump path.
 
 ---
 
@@ -155,40 +213,25 @@ Once `cov_prime` matches, rerun the dumps to confirm `sigma_n_n` > 0 for every G
 
 ---
 
-## Handoff Snapshot — 2025‑11‑08 08:35 EST
+## Handoff Snapshot — 2025‑11‑14 23:58 EST
 
 ### What’s currently in-flight
-- Host-side structs already enforce an 80 B `Gaussian3D` stride (see `crates/slicer_core/src/gpu.rs`), but the accompanying WGSL rewrite from `gs_wgsl_parity_patch.diff` has **not** been applied yet. Both `precalculate.wgsl` and `update_params.wgsl` still rely on row-assembled rotation matrices.
-- `Config.rotation_matrix` is being populated with *column* data, while the shader interprets it as rows (`slice_to_world_matrix` transposes manually). This mismatch is the primary suspect for the incorrect `cov_prime` third column.
-- Latest dumps live under `tmp/` (see `git status`); keep them for reference before rerunning tests.
+- Host ↔ WGSL layouts are locked in (`DynamicParams` stride is 32 B, matrices stay three `vec4`s) and enforced by `cargo test -p slicer_shaders layout_snapshot`.
+- Parity scripts are green on the triplet PLY @ 256²: `compare_cov_debug.py` (`max_abs_diff=2.24e-08` from earlier run), `compare_dynamic.py` (`mean diff=1.824e-07`, `combined diff=7.549e-09`), and `compare_density.py` (`max_abs_diff=9.558e-08`, `mean_abs_diff=8.393e-10`). Fresh dumps live under `tmp/`.
+- Need to scale this validation beyond the tiny scene and hook the Python checks into automation so layout/shader regressions surface fast.
 
 ### Immediate next steps for the next agent
-1. **Review and apply `gs_wgsl_parity_patch.diff`.**  
-   - The patch modernizes `Gaussian3D`, rewrites K1/K2 to use explicit matrix multiplications (`W2S * Σ * W2Sᵀ`), and adds the Schur complement guard rails described above.  
-   - Apply the patch incrementally (e.g., `patch -p1 < gs_wgsl_parity_patch.diff` or cherry‑pick the relevant hunks) and run `cargo fmt`.
-2. **Regenerate GPU dumps after each atomic edit.**  
-   ```
-   cargo run -p slicer_app -- --gaussian-ply=$(pwd)/assets/examples/gaussian_triplet.ply \
-     --dump-precalc-debug-raw=tmp/precalc_debug.raw \
-     --dump-precalc-raw=tmp/precalc.raw \
-     --dump-dynamic-raw=tmp/dynamic.raw \
-     --dump-density-raw=tmp/density.raw \
-     --exit-after-ms=2000
-   ```
-   - Keep old dumps for comparison (rename before rerunning).
-3. **CPU vs GPU comparison script.**  
-   - Implement `scripts/compare_cov_debug.py` that rebuilds `cov_prime` on the CPU using the same config and reports `max_abs_diff` per Gaussian vs `tmp/precalc_debug.raw`.  
-   - Target tolerance: ≤ 1e‑6 after the WGSL fix. Fail the script if exceeded.
-4. **Document each test loop.**  
-   - After every successful pass (patch apply → cargo run → comparison script), append findings to this log so future agents see the progression.
+1. Re-run the dump + compare loop on a larger Gaussian set (≥50 k) and multiple grid resolutions; capture the new diffs here so we know the stride fix holds under load.
+2. Fold `compare_dynamic.py`/`compare_density.py` into `tools/red_green_cycle.sh` or a CI job (the scripts exit non-zero when tolerances blow up), keeping artifacts for inspection.
+3. Resume the export/readback/CI packaging milestones (M4–M6) now that K2/K3 are trustworthy—reuse the same numeric diff approach to validate headless exports before wiring UI polish.
 
 ### Known blockers to mention if reassigned
-- `sigma_n_n` still collapses to zero for anisotropic Gaussians until the rotation uniform semantics are corrected.
-- Density PNGs are still single-color because K2/K3 short-circuit when `cov_prime[2].z ≤ 0`.
-- CI/tests do not yet cover any of this; manual loops (`cargo run` + Python diff) are required for now.
+- The parity loop still requires spinning up `slicer_app` interactively to produce dumps; a headless/deterministic export path would make CI wiring easier.
+- CI is unaware of these checks; until automation lands we rely on agents to run the loop manually.
+- Export/readback parity still lacks tooling, so downstream milestones remain speculative until we replicate today’s diff strategy there.
 
 Keep this section updated as soon as a major checkpoint is reached so the next agent can resume without rediscovering the same alignment issues.
 
 ---
 
-_Last updated: 2025‑11‑08 by WGSL parity investigation._
+_Last updated: 2025‑11‑14 after K2/K3 parity verification._

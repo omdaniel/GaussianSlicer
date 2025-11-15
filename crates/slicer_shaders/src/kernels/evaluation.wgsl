@@ -20,7 +20,8 @@ struct PrecalculatedParams {
 struct DynamicParams {
     mean2d: vec2<f32>,
     combined_factor: f32,
-    _pad: vec3<f32>,
+    _padding0: f32,
+    _pad: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> config: Config;

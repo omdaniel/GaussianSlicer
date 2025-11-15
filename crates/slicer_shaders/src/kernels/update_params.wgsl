@@ -9,13 +9,11 @@ struct Config {
 };
 
 struct Gaussian3D {
-    mean: vec3<f32>,
-    _mean_pad: f32,
+    mean: vec4<f32>,
     covariance_col0: vec4<f32>,
     covariance_col1: vec4<f32>,
     covariance_col2: vec4<f32>,
-    weight: f32,
-    _pad: vec3<f32>,
+    weight_pad: vec4<f32>,
 };
 
 struct PrecalculatedParams {
@@ -30,7 +28,8 @@ struct PrecalculatedParams {
 struct DynamicParams {
     mean2d: vec2<f32>,
     combined_factor: f32,
-    _pad: vec3<f32>,
+    _padding0: f32,
+    _pad: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> config: Config;
@@ -41,7 +40,7 @@ struct DynamicParams {
 const EPSILON: f32 = 1e-6;
 const SQRT_2_PI: f32 = 2.50662827463100050242;
 
-fn slice_to_world_matrix() -> mat3x3<f32> {
+fn world_to_slice_matrix() -> mat3x3<f32> {
     let col0 = config.rotation_matrix_cols[0].xyz;
     let col1 = config.rotation_matrix_cols[1].xyz;
     let col2 = config.rotation_matrix_cols[2].xyz;
@@ -65,9 +64,8 @@ fn update_params_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let plane_normal = config.plane_normal.xyz;
     let plane_point = plane_normal * config.grid_params.x;
-    let slice_to_world = slice_to_world_matrix();
-    let world_to_slice = transpose(slice_to_world);
-    let mean_shifted = gaussian.mean - plane_point;
+    let world_to_slice = world_to_slice_matrix();
+    let mean_shifted = gaussian.mean.xyz - plane_point;
     let mean_prime = world_to_slice * mean_shifted;
 
     let mu_uv = mean_prime.xy;
@@ -85,5 +83,5 @@ fn update_params_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
         scaling = norm_const_1d * exp(exponent);
     }
 
-    dynamic_params[index].combined_factor = gaussian.weight * scaling * pre.norm_const2d;
+    dynamic_params[index].combined_factor = gaussian.weight_pad.x * scaling * pre.norm_const2d;
 }

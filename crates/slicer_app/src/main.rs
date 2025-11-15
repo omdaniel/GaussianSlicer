@@ -44,6 +44,9 @@ fn main() -> Result<()> {
     let mut dump_kernel_config_path: Option<PathBuf> = None;
     let mut dump_precalc_debug_path: Option<PathBuf> = None;
     let mut dump_density_path: Option<PathBuf> = None;
+    let mut num_distributions_override: Option<u32> = None;
+    let mut grid_resolution_override: Option<u32> = None;
+    let mut seed_override: Option<u64> = None;
     for arg in env::args().skip(1) {
         if let Some(value) = arg.strip_prefix("--exit-after-ms=") {
             let millis: u64 = value
@@ -52,6 +55,21 @@ fn main() -> Result<()> {
             exit_after_ms = Some(millis);
         } else if let Some(value) = arg.strip_prefix("--gaussian-ply=") {
             gaussian_ply_path = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--num-distributions=") {
+            let parsed: u32 = value
+                .parse()
+                .context("invalid value for --num-distributions (expected u32)")?;
+            num_distributions_override = Some(parsed);
+        } else if let Some(value) = arg.strip_prefix("--grid-resolution=") {
+            let parsed: u32 = value
+                .parse()
+                .context("invalid value for --grid-resolution (expected u32)")?;
+            grid_resolution_override = Some(parsed.max(1));
+        } else if let Some(value) = arg.strip_prefix("--seed=") {
+            let parsed: u64 = value
+                .parse()
+                .context("invalid value for --seed (expected u64)")?;
+            seed_override = Some(parsed);
         } else if let Some(value) = arg.strip_prefix("--capture-frame=") {
             capture_frame_path = Some(PathBuf::from(value));
         } else if let Some(value) = arg.strip_prefix("--dump-density-raw=") {
@@ -86,6 +104,15 @@ fn main() -> Result<()> {
     let (mut gpu_context, shaders) = block_on(slicer_gfx::init(window.as_ref()))?;
 
     let mut settings = RendererSettings::default();
+    if let Some(num) = num_distributions_override {
+        settings.num_distributions = num;
+    }
+    if let Some(resolution) = grid_resolution_override {
+        settings.grid_resolution = resolution;
+    }
+    if let Some(seed) = seed_override {
+        settings.seed = Some(seed);
+    }
     let mut gaussians = if let Some(path) = gaussian_ply_path.as_ref() {
         let dataset = load_gaussians_from_ply(path)
             .with_context(|| format!("failed to load Gaussian splat file {}", path.display()))?;

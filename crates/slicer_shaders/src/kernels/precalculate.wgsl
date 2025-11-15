@@ -9,13 +9,11 @@ struct Config {
 };
 
 struct Gaussian3D {
-    mean: vec3<f32>,
-    _mean_pad: f32,
+    mean: vec4<f32>,
     covariance_col0: vec4<f32>,
     covariance_col1: vec4<f32>,
     covariance_col2: vec4<f32>,
-    weight: f32,
-    _pad: vec3<f32>,
+    weight_pad: vec4<f32>,
 };
 
 struct PrecalculatedParams {
@@ -57,7 +55,7 @@ fn determinant_2x2(col0: vec2<f32>, col1: vec2<f32>) -> f32 {
     return col0.x * col1.y - col1.x * col0.y;
 }
 
-fn slice_to_world_matrix() -> mat3x3<f32> {
+fn world_to_slice_matrix() -> mat3x3<f32> {
     let col0 = config.rotation_matrix_cols[0].xyz;
     let col1 = config.rotation_matrix_cols[1].xyz;
     let col2 = config.rotation_matrix_cols[2].xyz;
@@ -72,8 +70,8 @@ fn precalculate_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let gaussian = gaussians[index];
-    let slice_to_world = slice_to_world_matrix();
-    let world_to_slice = transpose(slice_to_world);
+    let world_to_slice = world_to_slice_matrix();
+    let slice_to_world = transpose(world_to_slice);
 
     let covariance = mat3x3<f32>(
         gaussian.covariance_col0.xyz,
@@ -86,9 +84,9 @@ fn precalculate_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
     precalc_debug[index].cov_col0 = vec4<f32>(cov_prime[0], 0.0);
     precalc_debug[index].cov_col1 = vec4<f32>(cov_prime[1], 0.0);
     precalc_debug[index].cov_col2 = vec4<f32>(cov_prime[2], 0.0);
-    precalc_debug[index].rot_col0 = config.rotation_matrix_cols[0];
-    precalc_debug[index].rot_col1 = config.rotation_matrix_cols[1];
-    precalc_debug[index].rot_col2 = config.rotation_matrix_cols[2];
+    precalc_debug[index].rot_col0 = vec4<f32>(slice_to_world[0], 0.0);
+    precalc_debug[index].rot_col1 = vec4<f32>(slice_to_world[1], 0.0);
+    precalc_debug[index].rot_col2 = vec4<f32>(slice_to_world[2], 0.0);
     precalc_debug[index].w2s_col0 = vec4<f32>(world_to_slice[0], 0.0);
     precalc_debug[index].w2s_col1 = vec4<f32>(world_to_slice[1], 0.0);
     precalc_debug[index].w2s_col2 = vec4<f32>(world_to_slice[2], 0.0);

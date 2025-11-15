@@ -11,8 +11,13 @@
 - **UI Shell (M4 kick-off):** `slicer_app` now runs a winit + egui loop, dispatches the compute passes every frame, and displays the density texture with interactive visualization controls.
 - **Red/Green Loop:** `tools/red_green_cycle.sh` automates `cargo check`, `cargo test`, and a short `slicer_app` smoke-run (`--exit-after-ms`) so agents can iterate quickly and capture runtime validation errors.
 - **Shared Dataset Import:** Both host apps ingest Gaussian Splat PLY files via `--gaussian-ply=PATH`, so Swift/Metal and Rust/wgpu can slice the exact same mixtures.
-- **Shader Parity Tracking:** `docs/wgsl_parity_log.md` plus `scripts/compare_cov_debug.py` capture the current Metal↔WGSL delta. K1 alignment issues are resolved, density buffers vary correctly, but the covariance change-of-basis still diverges (symmetry error ~6.6e-1). The debug buffer now records rotation columns, world→slice rows, `covariance * slice_to_world`, and per-row dot products so agents can finish the fix.
-- **Outstanding Milestones:** Export/readback flows, full UI parity, shader parity fixes (K1 → K3), and CI packaging (M4–M6) remain open; immediate focus is getting `scripts/compare_cov_debug.py` to pass by correcting the `covariance * slice_to_world` multiply.
+- **Shader Parity Tracking:** `docs/wgsl_parity_log.md` plus the new tooling (`scripts/compare_cov_debug.py`, `scripts/compare_dynamic.py`, `scripts/compare_density.py`) capture the Metal↔WGSL delta. K1 now matches Swift/Metal within `2.3e-8` (triplet PLY via the comparison script); rotation matrices and the 80 B Gaussian stride are aligned in both stacks. K2/K3 scripts run the CPU reference math and diff `tmp/dynamic.raw` / `tmp/density.raw`, currently failing because the WGSL update/evaluation stages still zero the anisotropic gaussians (see log for exact diffs).
+- **Large Scene Validation:** Procedural 50 k-gaussian scenes (seed=1234) now run via `--num-distributions`, `--grid-resolution`, and `--seed` CLI overrides. `compare_dynamic.py` stays within 2.2e-6 @ 50 k, while the new sampled mode in `compare_density.py` confirms 256²/512² grids stay within 2.3e-8 across thousands of texels.
+- **Red/Green Guardrail:** `tools/red_green_cycle.sh` now dumps the triplet PLY, then runs `compare_dynamic.py` + `compare_density.py` so regressions fail the default dev loop.
+- **Outstanding Milestones:**
+  - Scale parity coverage beyond the triplet scene: run the sampled scripts on production PLYs + higher grid sizes, then gate them in CI so regressions fail even without manual intervention.
+  - Implement headless export/readback flows: add a CLI-driven K2→K3 Z-stack export (RAW/MHD) with staging reads, then feed both Swift + Rust outputs into `scripts/compare_volume_exports.py` for numeric parity.
+  - Resume UI parity + packaging work (M4–M6): once exports are stable, finish egui feature parity, wire CI packaging across macOS/Linux/Windows, and keep the new parity automation as a required check.
 
 ## 0) TL;DR
 - Port to **Rust + wgpu + egui** with the same features and visual output as Swift/Metal.
