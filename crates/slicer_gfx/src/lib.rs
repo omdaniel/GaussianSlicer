@@ -622,6 +622,7 @@ impl RendererResources {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target_view: &TextureView,
+        target_size: [u32; 2],
     ) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Visualization Pass"),
@@ -645,7 +646,37 @@ impl RendererResources {
 
         pass.set_pipeline(&self.pipelines.visualize);
         pass.set_bind_group(0, &self.bind_groups.visualize, &[]);
+        let viewport = square_viewport(target_size);
+        pass.set_viewport(
+            viewport.x,
+            viewport.y,
+            viewport.width,
+            viewport.height,
+            0.0,
+            1.0,
+        );
         pass.draw(0..6, 0..1);
+    }
+}
+
+struct Viewport {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+fn square_viewport(target_size: [u32; 2]) -> Viewport {
+    let target_width = target_size[0] as f32;
+    let target_height = target_size[1] as f32;
+    let square = target_width.min(target_height).max(1.0);
+    let x = 0.0;
+    let y = ((target_height - square) * 0.5).max(0.0);
+    Viewport {
+        x,
+        y,
+        width: square,
+        height: square,
     }
 }
 

@@ -689,7 +689,7 @@ fn render_frame(
     });
 
     if let Some(job) = capture_job.as_ref() {
-        renderer.encode_visualization_pass(&mut encoder, &job.view);
+        renderer.encode_visualization_pass(&mut encoder, &job.view, [job.width, job.height]);
     }
 
     if let Some(job) = density_dump.as_ref() {
@@ -736,7 +736,14 @@ fn render_frame(
         encoder.copy_buffer_to_buffer(renderer.precalc_debug_buffer(), 0, &job.buffer, 0, job.size);
     }
 
-    renderer.encode_visualization_pass(&mut encoder, &surface_view);
+    renderer.encode_visualization_pass(
+        &mut encoder,
+        &surface_view,
+        [
+            gpu_context.surface_config.width,
+            gpu_context.surface_config.height,
+        ],
+    );
 
     let pixels_per_point = window.scale_factor() as f32;
     let paint_jobs = egui_ctx.tessellate(full_output.shapes, pixels_per_point);
