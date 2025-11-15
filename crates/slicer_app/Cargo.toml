@@ -20,3 +20,4 @@ winit = { workspace = true }
 glam = { workspace = true }
 image = { workspace = true }
 bytemuck = { workspace = true }
+half = "2.4"

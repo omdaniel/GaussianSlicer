@@ -2359,6 +2359,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "glam",
+ "half",
  "image",
  "pollster",
  "slicer_core",

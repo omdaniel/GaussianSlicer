@@ -18,6 +18,7 @@ struct RendererSettings {
     var densityMax: Float
     var colorLevels: UInt32
     var outlineWidth: Float
+    var filterMode: UInt32
 }
 
 final class AppSettings: ObservableObject {
@@ -38,6 +39,7 @@ final class AppSettings: ObservableObject {
     @Published var densityMaxText: String
     @Published var colorLevels: Int
     @Published var outlineWidthText: String
+    @Published var useNearestFilter: Bool
 
     private var lastSettings: RendererSettings
 
@@ -57,7 +59,8 @@ final class AppSettings: ObservableObject {
             densityMin: config.densityMin,
             densityMax: config.densityMax,
             colorLevels: config.colorLevels,
-            outlineWidth: config.outlineWidth
+            outlineWidth: config.outlineWidth,
+            filterMode: config.filterMode
         )
         lastSettings = initial
 
@@ -78,6 +81,7 @@ final class AppSettings: ObservableObject {
         densityMaxText = Self.format(config.densityMax)
         colorLevels = Int(config.colorLevels)
         outlineWidthText = Self.format(config.outlineWidth)
+        useNearestFilter = config.filterMode != 0
     }
 
     func makeRendererSettings() -> RendererSettings {
@@ -144,6 +148,7 @@ final class AppSettings: ObservableObject {
         sanitized.colormap = colormap
         sanitized.invertColormap = invertColormap
         sanitized.useLogScale = useLogScale
+        sanitized.filterMode = useNearestFilter ? 1 : 0
 
         lastSettings = sanitized
         return sanitized
@@ -169,6 +174,7 @@ final class AppSettings: ObservableObject {
         densityMaxText = Self.format(settings.densityMax)
         colorLevels = Int(settings.colorLevels)
         outlineWidthText = Self.format(settings.outlineWidth)
+        useNearestFilter = settings.filterMode != 0
     }
 
     private static func format<T: BinaryFloatingPoint>(_ value: T) -> String {

@@ -203,6 +203,9 @@ struct ContentView: View {
                         EditableTextField(text: $settings.outlineWidthText)
                             .frame(width: 120)
                     }
+                    Toggle("Nearest Neighbor Filter", isOn: $settings.useNearestFilter)
+                        .toggleStyle(.switch)
+                        .padding(.leading, labelWidth)
                 }
             }
         }

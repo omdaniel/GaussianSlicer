@@ -27,7 +27,7 @@ struct DynamicParams {
 @group(0) @binding(0) var<uniform> config: Config;
 @group(0) @binding(2) var<storage, read> precalc: array<PrecalculatedParams>;
 @group(0) @binding(3) var<storage, read> dynamic_params: array<DynamicParams>;
-@group(0) @binding(4) var output_texture: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var output_texture: texture_storage_2d<rgba16float, write>;
 
 const EPSILON: f32 = 1e-6;
 
@@ -92,6 +92,6 @@ fn evaluation_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(
         output_texture,
         vec2<i32>(i32(global_id.x), i32(global_id.y)),
-        vec4<f32>(total_density, 0.0, 0.0, 1.0)
+        vec4<f32>(total_density, 0.0, 0.0, 1.0),
     );
 }

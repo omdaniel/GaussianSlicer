@@ -78,6 +78,7 @@ Both the Swift and Rust frontends share the same CLI surface so you can drive de
 | `--gaussian-ply=PATH`     | Load a Gaussian Splat PLY (e.g., `assets/examples/gaussian_triplet.ply`). |
 | `--export-volume=PATH`    | Run headless, sweep all slices (K2→K3), and write a RAW/MHD pair. Use `.mhd` or `.raw` for the path extension. |
 | `--export-log-normalized` | (Optional) Apply the log-space normalization that mirrors the in-app visualization before writing the volume. |
+| `--filter-mode=MODE`      | Choose `bilinear` (default) or `nearest` sampling for the visualization/export path. Matches the UI toggle on both apps. |
 
 Any of the visualization parameters (colormap, density range, etc.) can also be specified; see `Sources/GaussianSlicer/RuntimeConfig.swift` for the full list.
 

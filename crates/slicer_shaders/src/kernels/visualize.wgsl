@@ -148,7 +148,7 @@ struct VisualizationConfig {
     density_min: f32,
     density_max: f32,
     outline_width: f32,
-    _pad: f32,
+    filter_mode: u32,
 };
 
 struct VertexOut {
@@ -188,8 +188,9 @@ fn fullscreen_vertex(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
 }
 
 @group(0) @binding(0) var density_texture: texture_2d<f32>;
-@group(0) @binding(1) var density_sampler: sampler;
-@group(0) @binding(2) var<uniform> viz: VisualizationConfig;
+@group(0) @binding(1) var linear_sampler: sampler;
+@group(0) @binding(2) var nearest_sampler: sampler;
+@group(0) @binding(3) var<uniform> viz: VisualizationConfig;
 
 fn sample_lut(lut_index: u32, idx0: u32, idx1: u32, frac: f32) -> vec3<f32> {
     switch (lut_index) {
@@ -279,9 +280,35 @@ fn quantize_normalized_value(norm: f32, levels: u32) -> QuantizeResult {
     return QuantizeResult(value, band_index);
 }
 
+fn sample_density_linear(uv: vec2<f32>) -> f32 {
+    return textureSample(density_texture, linear_sampler, uv).r;
+}
+
+fn sample_density_nearest(uv: vec2<f32>) -> f32 {
+    return textureSample(density_texture, nearest_sampler, uv).r;
+}
+
+fn sample_density(uv: vec2<f32>) -> f32 {
+    if (viz.filter_mode == 0u) {
+        return sample_density_linear(uv);
+    }
+    return sample_density_nearest(uv);
+}
+
+fn band_index_at(uv: vec2<f32>, levels: f32) -> u32 {
+    let clamped_uv = clamp(uv, vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0));
+    let density = sample_density_nearest(clamped_uv);
+    let norm = clamp(normalize_density_raw(density, viz), 0.0, 1.0);
+    var scaled = norm * levels;
+    if (scaled >= levels) {
+        scaled = levels - 1.0;
+    }
+    return u32(floor(scaled));
+}
+
 @fragment
 fn visualize_fragment(in: VertexOut) -> @location(0) vec4<f32> {
-    let density = textureSampleLevel(density_texture, density_sampler, in.tex_coord, 0.0).r;
+    let density = sample_density(in.tex_coord);
     let norm_raw = normalize_density_raw(density, viz);
 
     let dx = dpdx(norm_raw);
@@ -294,9 +321,11 @@ fn visualize_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let norm_original = clamp(norm_raw, 0.0, 1.0);
 
     var norm_for_color = norm_original;
+    var band_index = 0u;
     if (color_levels > 0u) {
         let quantized = quantize_normalized_value(norm_original, color_levels);
         norm_for_color = quantized.value;
+        band_index = quantized.band_index;
     }
 
     if (viz.invert != 0u) {
@@ -306,25 +335,50 @@ fn visualize_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     var color = sample_colormap(viz.colormap_index, norm_for_color);
 
     if (viz.outline_width > 0.0 && color_levels > 1u) {
-        if (norm_raw >= -1e-5 && norm_raw <= 1.0 + 1e-5) {
-            let scaled = norm_original * levels_f;
-            let nearest_boundary = round(scaled);
-            var distance_data_scaled = abs(scaled - nearest_boundary);
+        if (viz.filter_mode == 0u) {
+            if (norm_raw >= -1e-5 && norm_raw <= 1.0 + 1e-5) {
+                let scaled = norm_original * levels_f;
+                let nearest_boundary = round(scaled);
+                var distance_data_scaled = abs(scaled - nearest_boundary);
 
-            let is_min_or_max =
-                (nearest_boundary < 0.5) || (nearest_boundary > levels_f - 0.5);
-            if (is_min_or_max) {
-                distance_data_scaled = 0.5;
+                let is_min_or_max =
+                    (nearest_boundary < 0.5) || (nearest_boundary > levels_f - 0.5);
+                if (is_min_or_max) {
+                    distance_data_scaled = 0.5;
+                }
+
+                let gradient_scaled = gradient_magnitude * levels_f;
+                let pixel_distance =
+                    distance_data_scaled / max(gradient_scaled, 1e-6);
+
+                let half_width = viz.outline_width * 0.5;
+                let outline_factor = smoothstep(
+                    half_width + 0.5,
+                    half_width - 0.5,
+                    pixel_distance,
+                );
+
+                color = mix(
+                    color,
+                    vec3<f32>(0.0, 0.0, 0.0),
+                    vec3<f32>(outline_factor, outline_factor, outline_factor),
+                );
             }
+        } else {
+            let tex_dims = vec2<f32>(vec2<u32>(textureDimensions(density_texture, 0u)));
+            let texel = vec2<f32>(1.0 / tex_dims.x, 1.0 / tex_dims.y);
 
-            let gradient_scaled = gradient_magnitude * levels_f;
-            let pixel_distance =
-                distance_data_scaled / max(gradient_scaled, 1e-6);
+            let center_band = band_index;
+            let left_band = band_index_at(in.tex_coord + vec2<f32>(-texel.x, 0.0), levels_f);
+            let right_band = band_index_at(in.tex_coord + vec2<f32>(texel.x, 0.0), levels_f);
+            let down_band = band_index_at(in.tex_coord + vec2<f32>(0.0, -texel.y), levels_f);
+            let up_band = band_index_at(in.tex_coord + vec2<f32>(0.0, texel.y), levels_f);
 
-            let half_width = viz.outline_width * 0.5;
-            let outline_factor =
-                smoothstep(half_width + 0.5, half_width - 0.5, pixel_distance);
-
+            let is_boundary = bool(center_band != left_band)
+                || bool(center_band != right_band)
+                || bool(center_band != down_band)
+                || bool(center_band != up_band);
+            let outline_factor = select(0.0, 1.0, is_boundary);
             color = mix(
                 color,
                 vec3<f32>(0.0, 0.0, 0.0),

@@ -14,6 +14,7 @@ use egui::{Context as EguiContext, ViewportId};
 use egui_wgpu::{wgpu, ScreenDescriptor};
 use egui_winit::State as EguiWinitState;
 use glam::Vec3;
+use half::f16;
 use image::ImageBuffer;
 use pollster::block_on;
 use slicer_core::{
@@ -361,6 +362,18 @@ fn render_frame(
                     egui::Slider::new(&mut viz_config.outline_width, 0.0..=4.0)
                         .text("Outline width"),
                 );
+                ui.horizontal(|ui| {
+                    ui.label("Filter");
+                    egui::ComboBox::from_id_salt("filter_mode_combo")
+                        .selected_text(match viz_config.filter_mode {
+                            0 => "Bilinear",
+                            _ => "Nearest",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut viz_config.filter_mode, 0, "Bilinear");
+                            ui.selectable_value(&mut viz_config.filter_mode, 1, "Nearest");
+                        });
+                });
                 ui.label("Plane offset");
                 ui.add(
                     egui::Slider::new(
@@ -611,7 +624,7 @@ fn render_frame(
     let density_dump = pending_density_dump.map(|path| {
         let width = settings.grid_resolution.max(1);
         let height = settings.grid_resolution.max(1);
-        let bytes_per_pixel = 4u32;
+        let bytes_per_pixel = 8u32;
         let bytes_per_row = align_to(
             width * bytes_per_pixel,
             wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u32,
@@ -630,6 +643,7 @@ fn render_frame(
             width,
             height,
             bytes_per_row,
+            bytes_per_pixel,
         }
     });
 
@@ -862,13 +876,17 @@ fn render_frame(
             .context("failed to map density buffer")?;
         let floats = {
             let data = buffer_slice.get_mapped_range();
-            let row_pitch = (job.width * std::mem::size_of::<f32>() as u32) as usize;
             let mut values = vec![0f32; (job.width * job.height) as usize];
+            let row_data_len = (job.width * job.bytes_per_pixel) as usize;
             for (row, chunk) in values.chunks_exact_mut(job.width as usize).enumerate() {
                 let offset = row * job.bytes_per_row as usize;
-                let row_bytes = &data[offset..offset + row_pitch];
-                let row_values: &[f32] = cast_slice(row_bytes);
-                chunk.copy_from_slice(row_values);
+                let row_bytes = &data[offset..offset + row_data_len];
+                for (col, value) in chunk.iter_mut().enumerate() {
+                    let pixel_offset = col * job.bytes_per_pixel as usize;
+                    let r_bits =
+                        u16::from_le_bytes([row_bytes[pixel_offset], row_bytes[pixel_offset + 1]]);
+                    *value = f16::from_bits(r_bits).to_f32();
+                }
             }
             values
         };
@@ -1012,7 +1030,8 @@ fn export_volume_cli(
 }
 
 fn read_density_slice(renderer: &RendererResources, resolution: u32) -> Result<Vec<f32>> {
-    let width_bytes = resolution * mem::size_of::<f32>() as u32;
+    let bytes_per_pixel = 8u32;
+    let width_bytes = resolution * bytes_per_pixel;
     let bytes_per_row = align_to(width_bytes, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer_size = bytes_per_row as u64 * resolution as u64;
     let buffer = renderer.device().create_buffer(&wgpu::BufferDescriptor {
@@ -1064,11 +1083,16 @@ fn read_density_slice(renderer: &RendererResources, resolution: u32) -> Result<V
     let mut values = vec![0f32; (resolution * resolution) as usize];
     {
         let data = buffer_slice.get_mapped_range();
+        let row_data_len = width_bytes as usize;
         for (row, chunk) in values.chunks_exact_mut(resolution as usize).enumerate() {
             let offset = row * bytes_per_row as usize;
-            let row_bytes = &data[offset..offset + width_bytes as usize];
-            let row_values: &[f32] = cast_slice(row_bytes);
-            chunk.copy_from_slice(row_values);
+            let row_bytes = &data[offset..offset + row_data_len];
+            for (col, value) in chunk.iter_mut().enumerate() {
+                let pixel_offset = col * bytes_per_pixel as usize;
+                let r_bits =
+                    u16::from_le_bytes([row_bytes[pixel_offset], row_bytes[pixel_offset + 1]]);
+                *value = f16::from_bits(r_bits).to_f32();
+            }
         }
     }
     buffer.unmap();
@@ -1156,6 +1180,7 @@ struct DensityDumpJob {
     width: u32,
     height: u32,
     bytes_per_row: u32,
+    bytes_per_pixel: u32,
 }
 
 struct BufferDumpJob {

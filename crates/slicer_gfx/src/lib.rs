@@ -177,7 +177,7 @@ pub fn create_pipeline_layouts(device: &Device) -> PipelineLayouts {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::WriteOnly,
-                    format: TextureFormat::R32Float,
+                    format: TextureFormat::Rgba16Float,
                     view_dimension: TextureViewDimension::D2,
                 },
                 count: None,
@@ -192,7 +192,7 @@ pub fn create_pipeline_layouts(device: &Device) -> PipelineLayouts {
                 binding: 0,
                 visibility: ShaderStages::FRAGMENT,
                 ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: false },
+                    sample_type: TextureSampleType::Float { filterable: true },
                     view_dimension: TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -201,11 +201,17 @@ pub fn create_pipeline_layouts(device: &Device) -> PipelineLayouts {
             BindGroupLayoutEntry {
                 binding: 1,
                 visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
+                ty: BindingType::Sampler(SamplerBindingType::Filtering),
                 count: None,
             },
             BindGroupLayoutEntry {
                 binding: 2,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 3,
                 visibility: ShaderStages::FRAGMENT,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
@@ -243,7 +249,8 @@ pub struct RendererResources {
     pub buffers: Buffers,
     pub density_texture: Texture,
     pub density_view: TextureView,
-    pub sampler: wgpu::Sampler,
+    pub linear_sampler: wgpu::Sampler,
+    pub nearest_sampler: wgpu::Sampler,
     pub visualization_config: VisualizationConfig,
     grid_resolution: u32,
     gaussian_buffer_size: u64,
@@ -353,10 +360,18 @@ impl RendererResources {
 
         let density_texture = create_density_texture(&device, settings.grid_resolution);
         let density_view = density_texture.create_view(&TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&SamplerDescriptor {
-            label: Some("Density Sampler"),
+        let linear_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Density Linear Sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let nearest_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Density Nearest Sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -370,10 +385,14 @@ impl RendererResources {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::Sampler(&sampler),
+                    resource: BindingResource::Sampler(&linear_sampler),
                 },
                 BindGroupEntry {
                     binding: 2,
+                    resource: BindingResource::Sampler(&nearest_sampler),
+                },
+                BindGroupEntry {
+                    binding: 3,
                     resource: buffers.visualization.as_entire_binding(),
                 },
             ],
@@ -465,7 +484,8 @@ impl RendererResources {
             buffers,
             density_texture,
             density_view,
-            sampler,
+            linear_sampler,
+            nearest_sampler,
             visualization_config,
             grid_resolution,
             gaussian_buffer_size,
@@ -600,10 +620,6 @@ impl RendererResources {
 
     pub fn kernel_config_buffer_size(&self) -> u64 {
         CONFIG_UNIFORM_SIZE
-    }
-
-    pub fn sampler(&self) -> &wgpu::Sampler {
-        &self.sampler
     }
 
     pub fn grid_resolution(&self) -> u32 {
@@ -802,7 +818,7 @@ fn create_density_texture(device: &Device, resolution: u32) -> Texture {
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: TextureFormat::R32Float,
+        format: TextureFormat::Rgba16Float,
         usage: TextureUsages::STORAGE_BINDING
             | TextureUsages::TEXTURE_BINDING
             | TextureUsages::COPY_SRC,

@@ -98,7 +98,7 @@ pub struct VisualizationConfig {
     pub density_min: Scalar,
     pub density_max: Scalar,
     pub outline_width: Scalar,
-    pub _pad: Scalar,
+    pub filter_mode: u32,
 }
 
 /// Recreates the Swift `MetalRenderer.getRotationMatrix` helper using glam.
@@ -193,7 +193,7 @@ impl Default for VisualizationConfig {
             density_min: 1e-6,
             density_max: 0.05,
             outline_width: 0.0,
-            _pad: 0.0,
+            filter_mode: 0,
         }
     }
 }
@@ -208,7 +208,7 @@ impl VisualizationConfig {
             density_min: settings.density_min,
             density_max: settings.density_max,
             outline_width: 0.0,
-            _pad: 0.0,
+            filter_mode: 0,
         }
     }
 }

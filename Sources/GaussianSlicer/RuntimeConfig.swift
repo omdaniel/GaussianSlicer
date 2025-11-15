@@ -37,6 +37,7 @@ struct RuntimeConfig {
     let captureFrameURL: URL?
     let exportVolumeURL: URL?
     let exportLogNormalized: Bool
+    let filterMode: UInt32
 
     private init() {
         let defaultPlaneNormal = SIMD3<Float>(1.0, 0.5, 0.8)
@@ -60,6 +61,7 @@ struct RuntimeConfig {
         var captureFrameURL: URL? = nil
         var exportVolumeURL: URL? = nil
         var exportLogNormalized = false
+        var filterMode: UInt32 = 0
 
         for argument in CommandLine.arguments.dropFirst() {
             guard argument.hasPrefix("--") else { continue }
@@ -161,6 +163,15 @@ struct RuntimeConfig {
                 if let value {
                     captureFrameURL = URL(fileURLWithPath: value).standardizedFileURL
                 }
+            case "filter-mode":
+                if let value {
+                    let token = value.lowercased()
+                    if token == "nearest" || token == "1" {
+                        filterMode = 1
+                    } else {
+                        filterMode = 0
+                    }
+                }
             case "export-volume":
                 if let value {
                     exportVolumeURL = URL(fileURLWithPath: value).standardizedFileURL
@@ -214,6 +225,7 @@ struct RuntimeConfig {
         self.captureFrameURL = captureFrameURL
         self.exportVolumeURL = exportVolumeURL
         self.exportLogNormalized = exportLogNormalized
+        self.filterMode = filterMode
     }
 
     private static func printHelp() {
@@ -235,6 +247,7 @@ struct RuntimeConfig {
           --density-max=FLOAT         Maximum density for color mapping (default: 0.05).
           --color-levels=INT          Number of discrete color bands (0 = continuous).
           --outline-width=FLOAT       Width of band outlines in points (0 = off).
+          --filter-mode=MODE          bilinear (default) or nearest.
           --gaussian-ply=PATH         Load Gaussian mixture data from a Gaussian splat PLY file.
           --capture-frame=PATH        Render the visualization to a PNG at grid resolution and exit.
         """

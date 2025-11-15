@@ -213,12 +213,17 @@ Until the uniform columns match, `scripts/compare_cov_debug.py` will keep failin
   ```
   Result: `max_abs_diff=4.172e-07`, `mean_abs_diff=3.638e-10` (all 262 144 voxels within tolerance). The dumps under `tmp/swift_volume.*` / `tmp/rust_volume.*` are the new RAW/MHD baseline for CI.
 
+### 15. Bilinear ↔ Nearest Visualization Toggle (Nov 15, 2025 @ 14:00)
+- Added a `filter_mode` flag to both visualization configs plus dual samplers (bilinear + nearest). WGSL now writes densities to `rgba16float`, samples via the selected filter, and switches outlines accordingly (gradient-based for bilinear, discrete neighbor-band detection for nearest). Metal mirrors the same behavior.
+- CLI / UI wiring: `slicer_app --filter-mode={bilinear|nearest}` toggles Rust headlessly, the egui sidebar exposes a combo, and the Swift UI gained a “Nearest Neighbor Filter” switch (persisted through `RendererSettings`). Default remains bilinear to match the historic Metal look; nearest restores the old blocky style.
+ 
 ---
 
 ## Persistent Issues
 1. **Need broader datasets.** Coverage now includes a deterministic 50 k‑Gaussian procedural scene at 256²/512², but we still need to ingest production PLYs and extreme grid sizes (>768²) to watch for precision issues (hook `Tools/run_parity_suite.sh` up to those inputs).
 2. **Automation/CI still limited.** The red/green cycle now catches triplet regressions locally, but CI still ignores the sampled parity runs—wire `Tools/run_parity_suite.sh` (or an equivalent GitHub Action) into CI so failures show up without manual intervention.
 3. **Export/readback parity automation.** Headless exports now match numerically; next up is wiring the Swift+Rust commands plus `scripts/compare_volume_exports.py` into CI so RAW/MHD regressions are caught automatically.
+4. **Filter-mode snapshots.** Capture a couple of reference frames (bilinear vs nearest, both stacks) so we can sanity-check the toggle in future regressions.
 
 ---
 
