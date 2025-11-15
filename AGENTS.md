@@ -66,12 +66,64 @@ This workflow validates that the generated Swift Package Manager (SwiftPM) proje
 
 The validation is successful if all steps complete without error (exit code 0), confirming successful compilation of the Swift and Metal code.
 
-## Optional Runtime Parity Check (Gaussian Splat PLY)
+## Command-Line Runtime & Export Flags
 
-After a successful build you can launch the macOS app against the shared-test Gaussian splat file that both the Swift and Rust ports now understand. This is useful for visual parity investigations:
+Both the Swift and Rust frontends share the same CLI surface so you can drive deterministic workloads without touching UI state:
+
+| Flag | Description |
+|------|-------------|
+| `--num-distributions=INT` | Override the procedural point count (default `50_000`). |
+| `--grid-resolution=INT`   | Set the square slice resolution (default `256`). |
+| `--seed=UINT64`           | Fix the RNG seed used by the procedural generator. |
+| `--gaussian-ply=PATH`     | Load a Gaussian Splat PLY (e.g., `assets/examples/gaussian_triplet.ply`). |
+| `--export-volume=PATH`    | Run headless, sweep all slices (K2→K3), and write a RAW/MHD pair. Use `.mhd` or `.raw` for the path extension. |
+| `--export-log-normalized` | (Optional) Apply the log-space normalization that mirrors the in-app visualization before writing the volume. |
+
+Any of the visualization parameters (colormap, density range, etc.) can also be specified; see `Sources/GaussianSlicer/RuntimeConfig.swift` for the full list.
+
+## Optional Runtime & Export Parity Checks
+
+1. **Interactive parity (triplet PLY)**
+
+   After a successful build you can launch the macOS app against the shared-test Gaussian splat file that both the Swift and Rust ports understand. This is useful for visual investigations:
 
 ```bash
 swift run GaussianSlicer --gaussian-ply="$(pwd)/assets/examples/gaussian_triplet.ply"
+# Compare against Rust/wgpu
+cargo run -p slicer_app -- --gaussian-ply=assets/examples/gaussian_triplet.ply
 ```
 
-The tiny scene in `assets/examples/gaussian_triplet.ply` contains three Gaussians with different scales/orientations, making it quick to confirm that UI controls and visualization defaults match the Rust/wgpu frontend (`cargo run -p slicer_app -- --gaussian-ply=assets/examples/gaussian_triplet.ply`).
+2. **Headless RAW/MHD export parity**
+
+   Use the shared CLI to generate matching volumes, then diff them numerically:
+
+```bash
+# Swift export (headless)
+swift run GaussianSlicer \
+  --gaussian-ply=$(pwd)/assets/examples/gaussian_triplet.ply \
+  --grid-resolution=64 \
+  --export-volume=$(pwd)/tmp/swift_volume.mhd
+
+# Rust export (headless)
+cargo run -p slicer_app -- \
+  --gaussian-ply=$(pwd)/assets/examples/gaussian_triplet.ply \
+  --grid-resolution=64 \
+  --export-volume=$(pwd)/tmp/rust_volume.mhd
+
+# Numeric diff (full volume or use --sample-count=N for huge grids)
+python3 scripts/compare_volume_exports.py \
+  --reference-mhd tmp/swift_volume.mhd --reference-raw tmp/swift_volume.raw \
+  --candidate-mhd tmp/rust_volume.mhd --candidate-raw tmp/rust_volume.raw \
+  --tolerance 1e-5
+```
+
+3. **Full parity suite (optional)**
+
+   To exercise the triplet scene plus 50 k‑Gaussian procedural workloads, run:
+
+```bash
+Tools/run_parity_suite.sh                # defaults: triplet + 50k@256²/512²
+PARITY_SKIP_HEAVY=1 Tools/run_parity_suite.sh   # only the triplet baseline
+```
+
+This script dumps the necessary buffers, runs `scripts/compare_dynamic.py`, `scripts/compare_density.py`, and records sampled diffs for the heavy scenes.

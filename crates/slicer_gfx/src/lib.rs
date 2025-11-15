@@ -245,6 +245,7 @@ pub struct RendererResources {
     pub density_view: TextureView,
     pub sampler: wgpu::Sampler,
     pub visualization_config: VisualizationConfig,
+    grid_resolution: u32,
     gaussian_buffer_size: u64,
     precalc_buffer_size: u64,
     dynamic_buffer_size: u64,
@@ -302,6 +303,7 @@ impl RendererResources {
         let num_distributions = gaussians.len() as u32;
         let kernel_config = settings.kernel_config();
         let visualization_config = VisualizationConfig::from_settings(settings);
+        let grid_resolution = settings.grid_resolution;
 
         let kernel_config_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("KernelConfig Uniform"),
@@ -465,6 +467,7 @@ impl RendererResources {
             density_view,
             sampler,
             visualization_config,
+            grid_resolution,
             gaussian_buffer_size,
             precalc_buffer_size,
             dynamic_buffer_size,
@@ -601,6 +604,10 @@ impl RendererResources {
 
     pub fn sampler(&self) -> &wgpu::Sampler {
         &self.sampler
+    }
+
+    pub fn grid_resolution(&self) -> u32 {
+        self.grid_resolution
     }
 
     pub fn device(&self) -> &Device {

@@ -186,22 +186,46 @@ Until the uniform columns match, `scripts/compare_cov_debug.py` will keep failin
 - Full-grid density diffs for 50 k gaussians are infeasible (O(N·pixels) ≈ 3.3e9 ops), so `compare_density.py` now supports deterministic texel sampling; the sample counts above keep runtime <2 min while still covering thousands of pixels.
 
 ### 11. Red/Green Automation (Nov 15, 2025 @ 00:25)
-- `tools/red_green_cycle.sh` now runs the parity loop automatically: the triplet PLY smoke-run emits all dumps, then `compare_dynamic.py` and `compare_density.py` execute (full-grid) before the script reports success. Any shader/layout regression now fails the red/green cycle immediately.
+- `Tools/red_green_cycle.sh` now runs the parity loop automatically: the triplet PLY smoke-run emits all dumps, then `compare_dynamic.py` and `compare_density.py` execute (full-grid) before the script reports success. Any shader/layout regression now fails the red/green cycle immediately.
 - `scripts/compare_volume_exports.py` is staged for the upcoming RAW/MHD export parity work—point it at the Swift + Rust exports (with optional voxel sampling) to sanity-check headless volume stacks once the Rust exporter lands.
+
+### 12. Parity Suite Script (Nov 15, 2025 @ 00:35)
+- Added `Tools/run_parity_suite.sh`, which chains three scenarios: (1) triplet PLY (full-grid diff), (2) procedural 50 k @ 256² with 4 096 sampled texels, and (3) procedural 50 k @ 512² with 8 192 sampled texels. Set `PARITY_SKIP_HEAVY=1` (or override `PARITY_SAMPLE_{256,512}`) when a lighter loop is desired, but the defaults match the large-scene diffs logged above.
+- CI TODO: invoke this script (possibly nightly) so sampled parity failures show up without humans running the Python combos manually.
+
+### 13. CLI Volume Export (Nov 15, 2025 @ 00:45)
+- `slicer_app` gained `--export-volume=/path/to/output.{mhd,raw}` plus `--export-log-normalized`. When specified, the app runs headless, sweeps K2→K3 across all `grid_resolution` slices, and writes a RAW/MHD pair using the same normalization logic as the Swift `VolumeExporter`.
+- Use the new `scripts/compare_volume_exports.py --reference-{mhd,raw}=SWIFT --candidate-{mhd,raw}=RUST` helper (optionally `--sample-count=N`) to diff the exported stacks once the Rust exporter lands in the GUI path. This unlocks numeric parity for the export/readback milestone (M5) before UI polish.
+
+### 14. Swift↔Rust Export Parity (Nov 15, 2025 @ 01:20)
+- The Swift app now honors the same CLI flags as Rust for headless exports. Example (triplet PLY, 64³ grid):
+  ```bash
+  swift run GaussianSlicer --gaussian-ply=$(pwd)/assets/examples/gaussian_triplet.ply \
+    --grid-resolution=64 --export-volume=$(pwd)/tmp/swift_volume.mhd
+
+  cargo run -p slicer_app -- --gaussian-ply=$(pwd)/assets/examples/gaussian_triplet.ply \
+    --grid-resolution=64 --export-volume=$(pwd)/tmp/rust_volume.mhd
+
+  python3 scripts/compare_volume_exports.py \
+    --reference-mhd tmp/swift_volume.mhd --reference-raw tmp/swift_volume.raw \
+    --candidate-mhd tmp/rust_volume.mhd --candidate-raw tmp/rust_volume.raw \
+    --tolerance 1e-5
+  ```
+  Result: `max_abs_diff=4.172e-07`, `mean_abs_diff=3.638e-10` (all 262 144 voxels within tolerance). The dumps under `tmp/swift_volume.*` / `tmp/rust_volume.*` are the new RAW/MHD baseline for CI.
 
 ---
 
 ## Persistent Issues
-1. **Need broader datasets.** Coverage now includes a deterministic 50 k‑Gaussian procedural scene at 256²/512², but we still need to ingest production PLYs and extreme grid sizes (>768²) to watch for precision issues.
-2. **Automation/CI still limited.** The red/green cycle now catches triplet regressions locally, but CI still ignores the parity scripts and large-scene runs—wire the sampled checks into CI so failures show up without manual intervention.
-3. **Export/readback tooling untouched.** The export/readback milestones (M4–M6) still lack validation; once we trust K2/K3, replicate the same numeric diff strategy for the headless export path so CPU/GPU volumes match before wiring UI/UX polish.
+1. **Need broader datasets.** Coverage now includes a deterministic 50 k‑Gaussian procedural scene at 256²/512², but we still need to ingest production PLYs and extreme grid sizes (>768²) to watch for precision issues (hook `Tools/run_parity_suite.sh` up to those inputs).
+2. **Automation/CI still limited.** The red/green cycle now catches triplet regressions locally, but CI still ignores the sampled parity runs—wire `Tools/run_parity_suite.sh` (or an equivalent GitHub Action) into CI so failures show up without manual intervention.
+3. **Export/readback parity automation.** Headless exports now match numerically; next up is wiring the Swift+Rust commands plus `scripts/compare_volume_exports.py` into CI so RAW/MHD regressions are caught automatically.
 
 ---
 
 ## Suggested Next Paths
-1. **Scale the parity set.** Run the dump+compare loop against a dense PLY (≥50 k gaussians) and multiple grid resolutions to ensure the 32 B dynamic stride and density path hold up; log the new diffs here.
-2. **Automate the loop.** Extend `tools/red_green_cycle.sh` (or add a sibling script) to run `compare_dynamic.py` + `compare_density.py` after `cargo run`, so regressions trip locally before CI.
-3. **Plan CI/export coverage.** Reuse the diff tooling for headless exports/readbacks (M4–M6) and wire the parity scripts into CI once we have a headless dump path.
+1. **Scale the parity set.** Feed any production PLYs through `Tools/run_parity_suite.sh` (or extend it with additional scenes) and record the sampled diffs here so we spot issues beyond the procedural generator.
+2. **Automate the loop.** Wire `Tools/run_parity_suite.sh` into CI (triplet + sampled heavy scenes) so parity failures block merges; keep `Tools/red_green_cycle.sh` for the quick developer loop.
+3. **Plan CI/export coverage.** Hook the new `--export-volume` flag + `scripts/compare_volume_exports.py` into CI so both exporters stay in lockstep, then resume the egui feature work + packaging (M4–M6).
 
 ---
 
@@ -222,7 +246,7 @@ Until the uniform columns match, `scripts/compare_cov_debug.py` will keep failin
 
 ### Immediate next steps for the next agent
 1. Re-run the dump + compare loop on a larger Gaussian set (≥50 k) and multiple grid resolutions; capture the new diffs here so we know the stride fix holds under load.
-2. Fold `compare_dynamic.py`/`compare_density.py` into `tools/red_green_cycle.sh` or a CI job (the scripts exit non-zero when tolerances blow up), keeping artifacts for inspection.
+2. Fold `compare_dynamic.py`/`compare_density.py` into `Tools/red_green_cycle.sh` or a CI job (the scripts exit non-zero when tolerances blow up), keeping artifacts for inspection.
 3. Resume the export/readback/CI packaging milestones (M4–M6) now that K2/K3 are trustworthy—reuse the same numeric diff approach to validate headless exports before wiring UI polish.
 
 ### Known blockers to mention if reassigned
@@ -234,4 +258,4 @@ Keep this section updated as soon as a major checkpoint is reached so the next a
 
 ---
 
-_Last updated: 2025‑11‑14 after K2/K3 parity verification._
+_Last updated: 2025‑11‑15 after RAW/MHD export parity verification._

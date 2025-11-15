@@ -9,14 +9,15 @@
 - **Workspace & Core (M0–M2):** Cargo workspace, core configs, and WGSL shader translations are live with Naga-based validation in `cargo test`.
 - **GPU Runtime (M3):** `slicer_gfx` provisions K1 → K3 compute pipelines plus the fullscreen visualization pass, managing buffers/bind groups for the translated kernels.
 - **UI Shell (M4 kick-off):** `slicer_app` now runs a winit + egui loop, dispatches the compute passes every frame, and displays the density texture with interactive visualization controls.
-- **Red/Green Loop:** `tools/red_green_cycle.sh` automates `cargo check`, `cargo test`, and a short `slicer_app` smoke-run (`--exit-after-ms`) so agents can iterate quickly and capture runtime validation errors.
+- **Red/Green Loop:** `Tools/red_green_cycle.sh` automates `cargo check`, `cargo test`, and a short `slicer_app` smoke-run (`--exit-after-ms`) so agents can iterate quickly and capture runtime validation errors.
 - **Shared Dataset Import:** Both host apps ingest Gaussian Splat PLY files via `--gaussian-ply=PATH`, so Swift/Metal and Rust/wgpu can slice the exact same mixtures.
 - **Shader Parity Tracking:** `docs/wgsl_parity_log.md` plus the new tooling (`scripts/compare_cov_debug.py`, `scripts/compare_dynamic.py`, `scripts/compare_density.py`) capture the Metal↔WGSL delta. K1 now matches Swift/Metal within `2.3e-8` (triplet PLY via the comparison script); rotation matrices and the 80 B Gaussian stride are aligned in both stacks. K2/K3 scripts run the CPU reference math and diff `tmp/dynamic.raw` / `tmp/density.raw`, currently failing because the WGSL update/evaluation stages still zero the anisotropic gaussians (see log for exact diffs).
 - **Large Scene Validation:** Procedural 50 k-gaussian scenes (seed=1234) now run via `--num-distributions`, `--grid-resolution`, and `--seed` CLI overrides. `compare_dynamic.py` stays within 2.2e-6 @ 50 k, while the new sampled mode in `compare_density.py` confirms 256²/512² grids stay within 2.3e-8 across thousands of texels.
-- **Red/Green Guardrail:** `tools/red_green_cycle.sh` now dumps the triplet PLY, then runs `compare_dynamic.py` + `compare_density.py` so regressions fail the default dev loop.
+- **Red/Green Guardrail:** `Tools/red_green_cycle.sh` now dumps the triplet PLY, then runs `compare_dynamic.py` + `compare_density.py` so regressions fail the default dev loop.
+- **Parity Suite & Export CLI:** `Tools/run_parity_suite.sh` exercises the triplet scene plus 50 k procedural grids (256²/512² sampled checks). Both the Rust and Swift apps now support `--export-volume=PATH [--export-log-normalized]`, and `scripts/compare_volume_exports.py` confirms their RAW/MHD stacks match (triplet PLY @ 64³: max diff `4.17e-07`).
 - **Outstanding Milestones:**
   - Scale parity coverage beyond the triplet scene: run the sampled scripts on production PLYs + higher grid sizes, then gate them in CI so regressions fail even without manual intervention.
-  - Implement headless export/readback flows: add a CLI-driven K2→K3 Z-stack export (RAW/MHD) with staging reads, then feed both Swift + Rust outputs into `scripts/compare_volume_exports.py` for numeric parity.
+  - Finish headless export/readback flows: wire the Swift+Rust CLI exporters through `scripts/compare_volume_exports.py` inside CI so RAW/MHD parity becomes a blocking check.
   - Resume UI parity + packaging work (M4–M6): once exports are stable, finish egui feature parity, wire CI packaging across macOS/Linux/Windows, and keep the new parity automation as a required check.
 
 ## 0) TL;DR

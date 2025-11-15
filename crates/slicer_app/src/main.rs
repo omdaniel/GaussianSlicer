@@ -44,6 +44,8 @@ fn main() -> Result<()> {
     let mut dump_kernel_config_path: Option<PathBuf> = None;
     let mut dump_precalc_debug_path: Option<PathBuf> = None;
     let mut dump_density_path: Option<PathBuf> = None;
+    let mut export_volume_path: Option<PathBuf> = None;
+    let mut export_log_normalized = false;
     let mut num_distributions_override: Option<u32> = None;
     let mut grid_resolution_override: Option<u32> = None;
     let mut seed_override: Option<u64> = None;
@@ -84,6 +86,10 @@ fn main() -> Result<()> {
             dump_kernel_config_path = Some(PathBuf::from(value));
         } else if let Some(value) = arg.strip_prefix("--dump-precalc-debug-raw=") {
             dump_precalc_debug_path = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--export-volume=") {
+            export_volume_path = Some(PathBuf::from(value));
+        } else if arg == "--export-log-normalized" {
+            export_log_normalized = true;
         }
     }
 
@@ -136,6 +142,20 @@ fn main() -> Result<()> {
         .run_update_and_evaluate()
         .context("failed to run K2/K3")?;
 
+    let mut visualization_config = VisualizationConfig::from_settings(&settings);
+    renderer.update_visualization_config(&visualization_config);
+
+    if let Some(export_path) = export_volume_path {
+        export_volume_cli(
+            &mut renderer,
+            &mut settings,
+            &visualization_config,
+            &export_path,
+            export_log_normalized,
+        )?;
+        return Ok(());
+    }
+
     let egui_ctx = EguiContext::default();
     let mut egui_state = EguiWinitState::new(
         egui_ctx.clone(),
@@ -152,9 +172,6 @@ fn main() -> Result<()> {
         1,
         false,
     );
-
-    let mut visualization_config = VisualizationConfig::from_settings(&settings);
-    renderer.update_visualization_config(&visualization_config);
 
     let mut last_frame_time = Instant::now();
     let app_start_time = Instant::now();
@@ -943,6 +960,173 @@ fn render_frame(
         || dynamic_dumped
         || kernel_config_dumped
         || precalc_debug_dumped)
+}
+
+fn export_volume_cli(
+    renderer: &mut RendererResources,
+    settings: &mut RendererSettings,
+    viz: &VisualizationConfig,
+    export_path: &Path,
+    log_normalized: bool,
+) -> Result<()> {
+    let resolution = settings.grid_resolution.max(1);
+    let slice_elements = (resolution * resolution) as usize;
+    let mut volume = vec![0f32; slice_elements * resolution as usize];
+    let mut kernel_config = settings.kernel_config();
+    let range = settings.grid_max - settings.grid_min;
+    let denom = (resolution - 1).max(1);
+
+    for zi in 0..resolution {
+        let t = zi as f32 / denom as f32;
+        let offset = settings.grid_min + t * range;
+        settings.plane_offset = offset;
+        kernel_config.grid_params[0] = offset;
+        renderer.update_kernel_config(&kernel_config);
+        renderer
+            .run_update_and_evaluate()
+            .with_context(|| format!("failed to evaluate slice {}", zi))?;
+
+        let mut slice = read_density_slice(renderer, resolution)?;
+        if log_normalized {
+            normalize_slice_log(&mut slice, viz);
+        }
+        let base = zi as usize * slice_elements;
+        volume[base..base + slice_elements].copy_from_slice(&slice);
+    }
+
+    let (mhd_path, raw_path) = write_volume_files(&volume, resolution, settings, export_path)?;
+    println!(
+        "Exported volume ({}^3) to {} + {}",
+        resolution,
+        mhd_path.display(),
+        raw_path.display()
+    );
+    Ok(())
+}
+
+fn read_density_slice(renderer: &RendererResources, resolution: u32) -> Result<Vec<f32>> {
+    let width_bytes = resolution * mem::size_of::<f32>() as u32;
+    let bytes_per_row = align_to(width_bytes, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer_size = bytes_per_row as u64 * resolution as u64;
+    let buffer = renderer.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Density Readback Buffer"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = renderer
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Density Readback Encoder"),
+        });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: renderer.density_texture(),
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(resolution),
+            },
+        },
+        wgpu::Extent3d {
+            width: resolution,
+            height: resolution,
+            depth_or_array_layers: 1,
+        },
+    );
+    renderer.queue().submit(Some(encoder.finish()));
+
+    let buffer_slice = buffer.slice(..);
+    let (sender, receiver) = mpsc::channel();
+    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    let _ = renderer.device().poll(wgpu::PollType::Wait);
+    receiver
+        .recv()
+        .expect("density readback callback dropped")
+        .context("failed to map density buffer for export")?;
+
+    let mut values = vec![0f32; (resolution * resolution) as usize];
+    {
+        let data = buffer_slice.get_mapped_range();
+        for (row, chunk) in values.chunks_exact_mut(resolution as usize).enumerate() {
+            let offset = row * bytes_per_row as usize;
+            let row_bytes = &data[offset..offset + width_bytes as usize];
+            let row_values: &[f32] = cast_slice(row_bytes);
+            chunk.copy_from_slice(row_values);
+        }
+    }
+    buffer.unmap();
+    Ok(values)
+}
+
+fn normalize_slice_log(slice: &mut [f32], viz: &VisualizationConfig) {
+    let min_pos = 1e-12f32;
+    let v_min = viz.density_min.max(min_pos);
+    let v_max = viz.density_max.max(v_min + min_pos);
+    let log_v_min = v_min.ln();
+    let log_den = (v_max.ln() - log_v_min).max(min_pos);
+    let inv_log_den = 1.0 / log_den;
+    let invert = viz.invert != 0;
+    for value in slice.iter_mut() {
+        let clamped = value.max(min_pos);
+        let mut t = (clamped.ln() - log_v_min) * inv_log_den;
+        if invert {
+            t = 1.0 - t;
+        }
+        *value = t.clamp(0.0, 1.0);
+    }
+}
+
+fn write_volume_files(
+    volume: &[f32],
+    resolution: u32,
+    settings: &RendererSettings,
+    export_path: &Path,
+) -> Result<(PathBuf, PathBuf)> {
+    let mhd_path;
+    let raw_path;
+    match export_path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("mhd") => {
+            mhd_path = export_path.to_path_buf();
+            raw_path = export_path.with_extension("raw");
+        }
+        Some(ext) if ext.eq_ignore_ascii_case("raw") => {
+            raw_path = export_path.to_path_buf();
+            mhd_path = export_path.with_extension("mhd");
+        }
+        _ => {
+            mhd_path = export_path.with_extension("mhd");
+            raw_path = export_path.with_extension("raw");
+        }
+    }
+
+    fs::write(&raw_path, cast_slice(volume))
+        .with_context(|| format!("failed to write RAW volume {}", raw_path.display()))?;
+
+    let denom = (resolution - 1).max(1);
+    let spacing = f64::from(settings.grid_max - settings.grid_min) / f64::from(denom);
+    let header = format!(
+        "ObjectType = Image\nNDims = 3\nDimSize = {0} {0} {0}\nElementType = MET_FLOAT\nElementSpacing = {1} {1} {1}\nElementByteOrderMSB = False\nElementDataFile = {2}\n",
+        resolution,
+        spacing,
+        raw_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("density.raw")
+    );
+    fs::write(&mhd_path, header)
+        .with_context(|| format!("failed to write MHD header {}", mhd_path.display()))?;
+
+    Ok((mhd_path, raw_path))
 }
 
 fn align_to(value: u32, alignment: u32) -> u32 {

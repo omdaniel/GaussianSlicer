@@ -17,7 +17,17 @@ final class VolumeExporter {
         }
     }
 
+    static func exportVolumeHeadless(renderer: MetalRenderer, destination url: URL, normalizedLog01: Bool) {
+        exportVolumeCore(renderer: renderer, destination: url, normalizedLog01: normalizedLog01)
+    }
+
     private static func performExport(renderer: MetalRenderer, destination url: URL, normalizedLog01: Bool) async {
+        await MainActor.run { renderer.isExporting = true }
+        exportVolumeCore(renderer: renderer, destination: url, normalizedLog01: normalizedLog01)
+        await MainActor.run { renderer.isExporting = false }
+    }
+
+    private static func exportVolumeCore(renderer: MetalRenderer, destination url: URL, normalizedLog01: Bool) {
         let N = renderer.gridResolution
         let width = N
         let height = N
@@ -38,8 +48,6 @@ final class VolumeExporter {
 
         let range = renderer.gridMax - renderer.gridMin
         let denom = max(1, N - 1)
-
-        await MainActor.run { renderer.isExporting = true }
 
         for zi in 0..<depth {
             let t = Float(zi) / Float(denom)
@@ -83,8 +91,6 @@ final class VolumeExporter {
                 }
             }
         }
-
-        await MainActor.run { renderer.isExporting = false }
 
         // Write RAW + MHD header next to it
         let rawURL: URL

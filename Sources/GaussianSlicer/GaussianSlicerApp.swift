@@ -1,11 +1,27 @@
 import SwiftUI
 import AppKit
+import Foundation
 
 // The entry point for the macOS SwiftUI Application
 @main
 struct GaussianSlicerApp: App {
     init() {
-        if RuntimeConfig.shared.shouldExit {
+        let runtime = RuntimeConfig.shared
+        if runtime.shouldExit {
+            exit(EXIT_SUCCESS)
+        }
+        if let exportURL = runtime.exportVolumeURL {
+            guard let device = MTLCreateSystemDefaultDevice() else {
+                fatalError("Metal is required for headless export.")
+            }
+            let appSettings = AppSettings(config: runtime)
+            let rendererSettings = appSettings.makeRendererSettings()
+            let renderer = MetalRenderer(device: device, settings: rendererSettings)
+            VolumeExporter.exportVolumeHeadless(
+                renderer: renderer,
+                destination: exportURL,
+                normalizedLog01: runtime.exportLogNormalized
+            )
             exit(EXIT_SUCCESS)
         }
         // Ensure the app becomes a regular, frontmost app when launched from Terminal

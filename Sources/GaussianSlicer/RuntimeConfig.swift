@@ -35,6 +35,8 @@ struct RuntimeConfig {
     let shouldExit: Bool
     let gaussianPlyURL: URL?
     let captureFrameURL: URL?
+    let exportVolumeURL: URL?
+    let exportLogNormalized: Bool
 
     private init() {
         let defaultPlaneNormal = SIMD3<Float>(1.0, 0.5, 0.8)
@@ -56,6 +58,8 @@ struct RuntimeConfig {
         var shouldExit = false
         var gaussianPlyURL: URL? = nil
         var captureFrameURL: URL? = nil
+        var exportVolumeURL: URL? = nil
+        var exportLogNormalized = false
 
         for argument in CommandLine.arguments.dropFirst() {
             guard argument.hasPrefix("--") else { continue }
@@ -157,6 +161,18 @@ struct RuntimeConfig {
                 if let value {
                     captureFrameURL = URL(fileURLWithPath: value).standardizedFileURL
                 }
+            case "export-volume":
+                if let value {
+                    exportVolumeURL = URL(fileURLWithPath: value).standardizedFileURL
+                }
+            case "export-log-normalized":
+                if let value {
+                    if let parsed = RuntimeConfig.parseBool(from: value) {
+                        exportLogNormalized = parsed
+                    }
+                } else {
+                    exportLogNormalized = true
+                }
             default:
                 print("Warning: Unrecognized option '--\(key)'. Use --help for available flags.")
             }
@@ -196,6 +212,8 @@ struct RuntimeConfig {
         self.planeNormal = simd_normalize(planeNormal)
         self.gaussianPlyURL = gaussianPlyURL
         self.captureFrameURL = captureFrameURL
+        self.exportVolumeURL = exportVolumeURL
+        self.exportLogNormalized = exportLogNormalized
     }
 
     private static func printHelp() {

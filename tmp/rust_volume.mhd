@@ -1,0 +1,7 @@
+ObjectType = Image
+NDims = 3
+DimSize = 64 64 64
+ElementType = MET_FLOAT
+ElementSpacing = 0.25396825396825395 0.25396825396825395 0.25396825396825395
+ElementByteOrderMSB = False
+ElementDataFile = rust_volume.raw
