@@ -188,6 +188,7 @@ struct VisualizationConfig {
     float densityMin;
     float densityMax;
     float outlineWidth;
+    uint filterMode;
 };
 
 // ==============================================================================
@@ -487,10 +488,16 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
                                texture2d<float> densityTexture [[texture(0)]],
                                constant VisualizationConfig &viz [[buffer(0)]])
 {
-    constexpr sampler textureSampler(mag_filter::linear, min_filter::linear);
+    constexpr sampler linearSampler(mag_filter::linear, min_filter::linear);
+    constexpr sampler nearestSampler(mag_filter::nearest, min_filter::nearest);
 
     // 1. Sample density and calculate the raw, unclamped normalized density.
-    float density = densityTexture.sample(textureSampler, in.texCoord).r;
+    float density;
+    if (viz.filterMode == 0) {
+        density = densityTexture.sample(linearSampler, in.texCoord).r;
+    } else {
+        density = densityTexture.sample(nearestSampler, in.texCoord).r;
+    }
     float normRaw = normalizeDensityRaw(density, viz);
 
     // 2. Calculate screen-space derivatives (gradient) of the normalized density.
@@ -550,4 +557,3 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 
     return float4(color, 1.0);
 }
-

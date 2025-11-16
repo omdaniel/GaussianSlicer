@@ -24,6 +24,7 @@ struct VisualizationConfig {
     var densityMin: Float
     var densityMax: Float
     var outlineWidth: Float
+    var filterMode: UInt32
 }
 
 class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
@@ -80,7 +81,8 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
             colorLevels: settings.colorLevels,
             densityMin: settings.densityMin,
             densityMax: settings.densityMax,
-            outlineWidth: settings.outlineWidth
+            outlineWidth: settings.outlineWidth,
+            filterMode: settings.filterMode
         )
         gaussianPlyURL = RuntimeConfig.shared.gaussianPlyURL
 
@@ -251,7 +253,8 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
             colorLevels: newSettings.colorLevels,
             densityMin: newSettings.densityMin,
             densityMax: newSettings.densityMax,
-            outlineWidth: newSettings.outlineWidth
+            outlineWidth: newSettings.outlineWidth,
+            filterMode: newSettings.filterMode
         )
 
         currentOffset = max(min(currentOffset, gridMax), gridMin)
