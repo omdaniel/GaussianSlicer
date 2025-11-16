@@ -1,12 +1,13 @@
 import Foundation
 import Metal
 import AppKit
+import UniformTypeIdentifiers
 
 final class VolumeExporter {
     static func exportVolume(renderer: MetalRenderer, parentWindow: NSWindow?, normalizedLog01: Bool) {
         let panel = NSSavePanel()
         panel.title = "Export Volume"
-        panel.allowedFileTypes = ["mhd", "raw"]
+        panel.allowedContentTypes = contentTypes(for: ["mhd", "raw"])
         panel.nameFieldStringValue = "density.mhd"
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
@@ -137,7 +138,7 @@ final class VolumeExporter {
     static func exportOpenVDB(renderer: MetalRenderer, parentWindow: NSWindow?, normalizedLog01: Bool) {
         let panel = NSSavePanel()
         panel.title = "Export OpenVDB"
-        panel.allowedFileTypes = ["vdb"]
+        panel.allowedContentTypes = contentTypes(for: ["vdb"])
         panel.nameFieldStringValue = "density.vdb"
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
@@ -270,5 +271,14 @@ final class VolumeExporter {
 
         // Cleanup temporary RAW
         try? FileManager.default.removeItem(at: rawURL)
+    }
+
+    private static func contentTypes(for extensions: [String]) -> [UTType] {
+        extensions.map { ext in
+            if let resolved = UTType(filenameExtension: ext) {
+                return resolved
+            }
+            return UTType(tag: ext, tagClass: .filenameExtension, conformingTo: .data) ?? .data
+        }
     }
 }
