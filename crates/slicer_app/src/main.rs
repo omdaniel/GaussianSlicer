@@ -33,6 +33,9 @@ use winit::{
 #[cfg(target_arch = "wasm32")]
 compile_error!("wasm32 builds are out of scope for the Gaussian Slicer port.");
 
+const MIN_DENSITY_FLOOR: f32 = 1e-16;
+const DENSITY_GAP_RATIO: f32 = 1e-2;
+
 fn main() -> Result<()> {
     init_tracing();
 
@@ -332,30 +335,38 @@ fn render_frame(
                 ui.add(egui::Slider::new(&mut viz_config.color_levels, 0..=32).text("Levels"));
 
                 let mut density_min = viz_config.density_min;
+                let min_slider_upper =
+                    (viz_config.density_max - density_gap(viz_config.density_max))
+                        .max(MIN_DENSITY_FLOOR);
                 if ui
                     .add(
                         egui::Slider::new(
                             &mut density_min,
-                            1e-9..=viz_config.density_max.max(1e-8) - 1e-8,
+                            MIN_DENSITY_FLOOR..=min_slider_upper,
                         )
                         .logarithmic(true)
                         .text("Density min"),
                     )
                     .changed()
                 {
-                    viz_config.density_min = density_min.max(1e-9);
+                    viz_config.density_min =
+                        density_min.clamp(MIN_DENSITY_FLOOR, min_slider_upper);
                 }
 
                 let mut density_max = viz_config.density_max;
+                let max_slider_lower =
+                    (viz_config.density_min + density_gap(viz_config.density_min)).min(1.0);
                 if ui
                     .add(
-                        egui::Slider::new(&mut density_max, viz_config.density_min + 1e-8..=1.0)
+                        egui::Slider::new(&mut density_max, max_slider_lower..=1.0)
                             .logarithmic(true)
                             .text("Density max"),
                     )
                     .changed()
                 {
-                    viz_config.density_max = density_max.max(viz_config.density_min * 1.01);
+                    let min_allowed =
+                        (viz_config.density_min + density_gap(viz_config.density_min)).min(1.0);
+                    viz_config.density_max = density_max.max(min_allowed);
                 }
 
                 ui.add(
@@ -1099,8 +1110,12 @@ fn read_density_slice(renderer: &RendererResources, resolution: u32) -> Result<V
     Ok(values)
 }
 
+fn density_gap(value: f32) -> f32 {
+    (value.abs() * DENSITY_GAP_RATIO).max(MIN_DENSITY_FLOOR)
+}
+
 fn normalize_slice_log(slice: &mut [f32], viz: &VisualizationConfig) {
-    let min_pos = 1e-12f32;
+    let min_pos = MIN_DENSITY_FLOOR;
     let v_min = viz.density_min.max(min_pos);
     let v_max = viz.density_max.max(v_min + min_pos);
     let log_v_min = v_min.ln();

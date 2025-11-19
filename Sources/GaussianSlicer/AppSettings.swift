@@ -125,11 +125,12 @@ final class AppSettings: ObservableObject {
         }
         sanitized.planeNormal = simd_normalize(sanitized.planeNormal)
 
+        let minDensityFloor: Float = 1e-16
         if let parsed = Float(densityMinText.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            sanitized.densityMin = max(parsed, 1e-9)
+            sanitized.densityMin = max(parsed, minDensityFloor)
         }
         if let parsed = Float(densityMaxText.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            sanitized.densityMax = max(parsed, 1e-9)
+            sanitized.densityMax = max(parsed, minDensityFloor)
         }
         if sanitized.densityMin >= sanitized.densityMax {
             swap(&sanitized.densityMin, &sanitized.densityMax)

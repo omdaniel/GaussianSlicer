@@ -442,7 +442,7 @@ inline float3 sampleColormap(uint index, float t) {
 }
 
 inline float normalizeDensityRaw(float density, constant VisualizationConfig &viz) {
-    const float MIN_POSITIVE = 1e-12f;
+    const float MIN_POSITIVE = 1e-16f;
     float vMin = max(viz.densityMin, MIN_POSITIVE);
     float vMax = max(viz.densityMax, vMin + MIN_POSITIVE);
 

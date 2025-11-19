@@ -237,7 +237,7 @@ fn sample_colormap(index: u32, t: f32) -> vec3<f32> {
 }
 
 fn normalize_density_raw(density: f32, cfg: VisualizationConfig) -> f32 {
-    let min_positive = 1e-12;
+    let min_positive = 1e-16;
     let v_min = max(cfg.density_min, min_positive);
     let v_max = max(cfg.density_max, v_min + min_positive);
 

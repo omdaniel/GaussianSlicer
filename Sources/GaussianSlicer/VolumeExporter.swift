@@ -70,7 +70,7 @@ final class VolumeExporter {
             if normalizedLog01 {
                 // Normalize using log scale into [0,1] based on current visualization config
                 let viz = renderer.visualizationConfig
-                let minPos: Float = 1e-12
+                let minPos: Float = 1e-16
                 let vMin = max(viz.densityMin, minPos)
                 let vMax = max(viz.densityMax, vMin + minPos)
                 let logVMin = log(vMin)
@@ -211,7 +211,7 @@ final class VolumeExporter {
 
             if normalizedLog01 {
                 let viz = renderer.visualizationConfig
-                let minPos: Float = 1e-12
+                let minPos: Float = 1e-16
                 let vMin = max(viz.densityMin, minPos)
                 let vMax = max(viz.densityMax, vMin + minPos)
                 let logVMin = log(vMin)
