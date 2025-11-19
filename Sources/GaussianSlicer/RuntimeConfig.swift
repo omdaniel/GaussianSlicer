@@ -38,6 +38,7 @@ struct RuntimeConfig {
     let exportVolumeURL: URL?
     let exportLogNormalized: Bool
     let filterMode: UInt32
+    let exitAfterMs: UInt64?
 
     private init() {
         let defaultPlaneNormal = SIMD3<Float>(1.0, 0.5, 0.8)
@@ -62,6 +63,7 @@ struct RuntimeConfig {
         var exportVolumeURL: URL? = nil
         var exportLogNormalized = false
         var filterMode: UInt32 = 0
+        var exitAfterMs: UInt64? = nil
 
         for argument in CommandLine.arguments.dropFirst() {
             guard argument.hasPrefix("--") else { continue }
@@ -184,6 +186,10 @@ struct RuntimeConfig {
                 } else {
                     exportLogNormalized = true
                 }
+            case "exit-after-ms":
+                if let value, let parsed = UInt64(value) {
+                    exitAfterMs = parsed
+                }
             default:
                 print("Warning: Unrecognized option '--\(key)'. Use --help for available flags.")
             }
@@ -226,6 +232,7 @@ struct RuntimeConfig {
         self.exportVolumeURL = exportVolumeURL
         self.exportLogNormalized = exportLogNormalized
         self.filterMode = filterMode
+        self.exitAfterMs = exitAfterMs
     }
 
     private static func printHelp() {
@@ -250,6 +257,7 @@ struct RuntimeConfig {
           --filter-mode=MODE          bilinear (default) or nearest.
           --gaussian-ply=PATH         Load Gaussian mixture data from a Gaussian splat PLY file.
           --capture-frame=PATH        Render the visualization to a PNG at grid resolution and exit.
+          --exit-after-ms=INT         Exit the application after the specified milliseconds.
         """
         print(message)
     }

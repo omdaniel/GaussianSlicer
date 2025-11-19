@@ -30,6 +30,13 @@ struct GaussianSlicerApp: App {
             NSApplication.shared.activate(ignoringOtherApps: true)
             NSApplication.shared.windows.forEach { $0.makeKeyAndOrderFront(nil) }
         }
+        
+        if let exitDelay = runtime.exitAfterMs {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(exitDelay))) {
+                print("Exiting after \(exitDelay)ms as requested.")
+                exit(EXIT_SUCCESS)
+            }
+        }
     }
     
     var body: some Scene {
