@@ -9,6 +9,7 @@ constant float SQRT_2_PI = 2.50662827463100050242;
 // Epsilon for float32 stability checks
 constant float EPSILON = 1e-6;
 
+
 // Perceptually uniform / diverging gradients (sampled from MatPlotLib definitions)
 constant uint COLORMAP_LUT_SIZE = 11;
 constant float3 PLASMA_LUT[COLORMAP_LUT_SIZE] = {
@@ -328,6 +329,7 @@ kernel void updateParamsKernel(constant Config &config [[buffer(0)]],
 kernel void evaluationKernel(constant Config &config [[buffer(0)]],
                              device const PrecalculatedParams *precalcParams [[buffer(2)]],
                              device const DynamicParams *dynamicParams [[buffer(3)]],
+                             constant VisualizationConfig &viz [[buffer(4)]],
                              texture2d<float, access::write> outputTexture [[texture(0)]],
                              uint2 tid [[thread_position_in_grid]])
 {
@@ -354,7 +356,9 @@ kernel void evaluationKernel(constant Config &config [[buffer(0)]],
         const DynamicParams D = dynamicParams[i];
         
         // Optimization: Skip if factor is negligible
-        if (D.combinedFactor <= EPSILON) { continue; }
+        // Dynamic threshold based on visualization settings to prevent popping
+        float dynamicThreshold = viz.densityMin * 0.01;
+        if (D.combinedFactor <= dynamicThreshold) { continue; }
         
         const PrecalculatedParams P = precalcParams[i];
 

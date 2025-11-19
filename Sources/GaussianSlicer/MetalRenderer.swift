@@ -476,6 +476,10 @@ class MetalRenderer: NSObject, MTKViewDelegate, ObservableObject {
         setCommonBuffers(encoder: encoder)
         encoder.setTexture(densityTexture, index: 0)
         
+        // Bind visualization config for dynamic culling threshold
+        var vizConfig = visualizationConfig
+        encoder.setBytes(&vizConfig, length: MemoryLayout<VisualizationConfig>.stride, index: 4)
+        
         let resolution = max(1, gridResolution)
         let gridSize = MTLSize(width: resolution, height: resolution, depth: 1)
         
