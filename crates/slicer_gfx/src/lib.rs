@@ -66,7 +66,7 @@ pub async fn init(window: &Window) -> Result<(GpuContext<'_>, ShaderModules)> {
 
     let device_desc = DeviceDescriptor {
         label: Some("GaussianSlicer Device"),
-        required_features: Features::empty(),
+        required_features: Features::FLOAT32_FILTERABLE,
         required_limits: Limits::default(),
         ..Default::default()
     };
@@ -170,6 +170,7 @@ pub fn create_pipeline_layouts(device: &Device) -> PipelineLayouts {
         label: Some("evaluation_bind_group_layout"),
         entries: &[
             buffer_entry(0, BufferBindingType::Uniform),
+            buffer_entry(1, BufferBindingType::Uniform), // VisualizationConfig
             buffer_entry(2, BufferBindingType::Storage { read_only: true }),
             buffer_entry(3, BufferBindingType::Storage { read_only: true }),
             BindGroupLayoutEntry {
@@ -177,7 +178,7 @@ pub fn create_pipeline_layouts(device: &Device) -> PipelineLayouts {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::WriteOnly,
-                    format: TextureFormat::Rgba16Float,
+                    format: TextureFormat::R32Float,
                     view_dimension: TextureViewDimension::D2,
                 },
                 count: None,
@@ -450,6 +451,10 @@ impl RendererResources {
                     BindGroupEntry {
                         binding: 0,
                         resource: buffers.kernel_config.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: buffers.visualization.as_entire_binding(),
                     },
                     BindGroupEntry {
                         binding: 2,
@@ -818,7 +823,7 @@ fn create_density_texture(device: &Device, resolution: u32) -> Texture {
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba16Float,
+        format: TextureFormat::R32Float,
         usage: TextureUsages::STORAGE_BINDING
             | TextureUsages::TEXTURE_BINDING
             | TextureUsages::COPY_SRC,

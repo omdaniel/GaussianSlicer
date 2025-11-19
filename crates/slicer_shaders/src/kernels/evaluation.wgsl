@@ -24,12 +24,22 @@ struct DynamicParams {
     _pad: vec4<f32>,
 };
 
+struct VisualizationConfig {
+    colormap_index: u32,
+    invert: u32,
+    log_scale: u32,
+    color_levels: u32,
+    density_min: f32,
+    density_max: f32,
+    outline_width: f32,
+    filter_mode: u32,
+};
+
 @group(0) @binding(0) var<uniform> config: Config;
+@group(0) @binding(1) var<uniform> viz: VisualizationConfig;
 @group(0) @binding(2) var<storage, read> precalc: array<PrecalculatedParams>;
 @group(0) @binding(3) var<storage, read> dynamic_params: array<DynamicParams>;
-@group(0) @binding(4) var output_texture: texture_storage_2d<rgba16float, write>;
-
-const EPSILON: f32 = 1e-6;
+@group(0) @binding(4) var output_texture: texture_storage_2d<r32float, write>;
 
 @compute @workgroup_size(8, 8, 1)
 fn evaluation_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -71,7 +81,10 @@ fn evaluation_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     for (var i: u32 = 0u; i < config.num_distributions.x; i = i + 1u) {
         let dynamic_entry = dynamic_params[i];
-        if (dynamic_entry.combined_factor <= EPSILON) {
+        
+        // Dynamic threshold based on visualization settings to prevent popping
+        let dynamic_threshold = viz.density_min * 0.01;
+        if (dynamic_entry.combined_factor <= dynamic_threshold) {
             continue;
         }
 
