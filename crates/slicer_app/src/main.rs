@@ -465,8 +465,12 @@ fn render_frame(
                     }
 
                     let mut seed_enabled = settings.seed.is_some();
-                    if ui.checkbox(&mut seed_enabled, "Use fixed seed").changed() && !seed_enabled {
-                        settings.seed = None;
+                    if ui.checkbox(&mut seed_enabled, "Use fixed seed").changed() {
+                        if seed_enabled {
+                            settings.seed = Some(settings.seed.unwrap_or(0));
+                        } else {
+                            settings.seed = None;
+                        }
                     }
                     if seed_enabled {
                         let mut seed_value = settings.seed.unwrap_or(0);
