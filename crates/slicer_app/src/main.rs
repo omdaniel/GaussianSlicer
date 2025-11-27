@@ -331,7 +331,48 @@ fn render_frame(
                 if ui.checkbox(&mut invert, "Invert colormap").changed() {
                     viz_config.invert = if invert { 1 } else { 0 };
                 }
-                ui.add(egui::Slider::new(&mut viz_config.colormap_index, 0..=9).text("Colormap"));
+                egui::ComboBox::from_label("Colormap")
+                    .selected_text(match viz_config.colormap_index {
+                        0 => "Plasma",
+                        1 => "Viridis",
+                        2 => "Magma",
+                        3 => "Inferno",
+                        4 => "Turbo",
+                        5 => "Coolwarm",
+                        6 => "BlueOrange",
+                        7 => "Seismic",
+                        8 => "YlOrRd",
+                        9 => "Hot",
+                        10 => "Cividis",
+                        11 => "Sinebow",
+                        12 => "Spectral",
+                        13 => "RdBu",
+                        14 => "PiYG",
+                        15 => "Cubehelix",
+                        16 => "PuOr",
+                        17 => "BrBG",
+                        _ => "Unknown",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut viz_config.colormap_index, 0, "Plasma");
+                        ui.selectable_value(&mut viz_config.colormap_index, 1, "Viridis");
+                        ui.selectable_value(&mut viz_config.colormap_index, 2, "Magma");
+                        ui.selectable_value(&mut viz_config.colormap_index, 3, "Inferno");
+                        ui.selectable_value(&mut viz_config.colormap_index, 4, "Turbo");
+                        ui.selectable_value(&mut viz_config.colormap_index, 5, "Coolwarm");
+                        ui.selectable_value(&mut viz_config.colormap_index, 6, "BlueOrange");
+                        ui.selectable_value(&mut viz_config.colormap_index, 7, "Seismic");
+                        ui.selectable_value(&mut viz_config.colormap_index, 8, "YlOrRd");
+                        ui.selectable_value(&mut viz_config.colormap_index, 9, "Hot");
+                        ui.selectable_value(&mut viz_config.colormap_index, 10, "Cividis");
+                        ui.selectable_value(&mut viz_config.colormap_index, 11, "Sinebow");
+                        ui.selectable_value(&mut viz_config.colormap_index, 12, "Spectral");
+                        ui.selectable_value(&mut viz_config.colormap_index, 13, "RdBu");
+                        ui.selectable_value(&mut viz_config.colormap_index, 14, "PiYG");
+                        ui.selectable_value(&mut viz_config.colormap_index, 15, "Cubehelix");
+                        ui.selectable_value(&mut viz_config.colormap_index, 16, "PuOr");
+                        ui.selectable_value(&mut viz_config.colormap_index, 17, "BrBG");
+                    });
                 ui.add(egui::Slider::new(&mut viz_config.color_levels, 0..=32).text("Levels"));
 
                 let mut density_min = viz_config.density_min;
@@ -509,7 +550,15 @@ fn render_frame(
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
-                ui.allocate_space(ui.available_size());
+                let response = ui.allocate_response(ui.available_size(), egui::Sense::drag());
+                if response.dragged() {
+                    let delta = response.drag_delta();
+                    let shift_held = ui.input(|i| i.modifiers.shift);
+                    let sensitivity = if shift_held { 0.01 } else { 0.1 };
+                    settings.plane_offset += delta.x * sensitivity;
+                    settings.plane_offset =
+                        settings.plane_offset.clamp(settings.grid_min, settings.grid_max);
+                }
             });
     });
 
