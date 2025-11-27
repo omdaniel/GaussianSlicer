@@ -15,6 +15,9 @@ DerivedData/
 # SwiftPM package manager caches
 .swiftpm/
 
+# Zed settings
+.zed/
+
 
 # Cargo debug
 target/debug/
