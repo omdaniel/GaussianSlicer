@@ -21,3 +21,8 @@ DerivedData/
 
 # Cargo debug
 target/debug/
+
+
+# Windows build files
+Tools/build
+Tools/vcpkg
