@@ -36,6 +36,26 @@ compile_error!("wasm32 builds are out of scope for the Gaussian Slicer port.");
 const MIN_DENSITY_FLOOR: f32 = 1e-16;
 const DENSITY_GAP_RATIO: f32 = 1e-2;
 
+fn print_usage() {
+    println!("Usage: slicer_app [OPTIONS]");
+    println!("Options:");
+    println!("  --help, -h                         Print this help message");
+    println!("  --gaussian-ply=<PATH>              Load Gaussian splats from a PLY file");
+    println!("  --num-distributions=<N>            Override number of distributions (if generating)");
+    println!("  --grid-resolution=<N>              Override grid resolution (default: 128)");
+    println!("  --seed=<N>                         Override random seed");
+    println!("  --exit-after-ms=<MS>               Exit application after specified milliseconds");
+    println!("  --capture-frame=<PATH>             Save the first frame to an image file");
+    println!("  --export-volume=<PATH>             Export density volume to MHD/RAW files and exit");
+    println!("  --export-log-normalized            Apply log normalization to exported volume");
+    println!("  --dump-density-raw=<PATH>          Dump density volume raw data");
+    println!("  --dump-gaussians-raw=<PATH>        Dump Gaussian buffer raw data");
+    println!("  --dump-precalc-raw=<PATH>          Dump precalc buffer raw data");
+    println!("  --dump-dynamic-raw=<PATH>          Dump dynamic buffer raw data");
+    println!("  --dump-kernel-config-raw=<PATH>    Dump kernel config buffer raw data");
+    println!("  --dump-precalc-debug-raw=<PATH>    Dump precalc debug buffer raw data");
+}
+
 fn main() -> Result<()> {
     init_tracing();
 
@@ -54,6 +74,10 @@ fn main() -> Result<()> {
     let mut grid_resolution_override: Option<u32> = None;
     let mut seed_override: Option<u64> = None;
     for arg in env::args().skip(1) {
+        if arg == "--help" || arg == "-h" {
+            print_usage();
+            return Ok(());
+        }
         if let Some(value) = arg.strip_prefix("--exit-after-ms=") {
             let millis: u64 = value
                 .parse()
@@ -242,21 +266,10 @@ fn main() -> Result<()> {
                                 &mut dump_precalc_debug_path,
                                 last_frame_time,
                             ) {
-                                Ok(captured) => {
-                                    if captured {
-                                        target.exit();
-                                    }
-                                }
-                                Err(err) => {
-                                    eprintln!("frame render error: {err:?}");
-                                }
+                                Ok(_) => {}
+                                Err(e) => eprintln!("Render error: {:#}", e),
                             }
                             last_frame_time = Instant::now();
-                        }
-                        _ => {}
-                    }
-                }
-                Event::AboutToWait => {
                     if let Some(limit_ms) = exit_after_ms {
                         if app_start_time.elapsed().as_millis() as u64 >= limit_ms {
                             target.exit();
@@ -267,7 +280,10 @@ fn main() -> Result<()> {
                 }
                 _ => {}
             }
-        })
+        }
+        _ => {}
+    }
+    })
         .map_err(Into::into)
 }
 
@@ -435,6 +451,45 @@ fn render_frame(
                     .clamping(egui::SliderClamping::Always)
                     .text(""),
                 );
+
+                ui.separator();
+                ui.heading("Export");
+                if ui.button("Export Density (MHD+RAW)").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("MHD Header", &["mhd"])
+                        .add_filter("RAW Volume", &["raw"])
+                        .set_file_name("density.mhd")
+                        .save_file()
+                    {
+                        if let Err(e) = export_volume_cli(
+                            renderer,
+                            settings,
+                            viz_config,
+                            &path,
+                            settings.use_log_scale,
+                        ) {
+                            eprintln!("Failed to export volume: {:#}", e);
+                        }
+                    }
+                }
+
+                if ui.button("Export Density (OpenVDB)").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("OpenVDB", &["vdb"])
+                        .set_file_name("density.vdb")
+                        .save_file()
+                    {
+                        if let Err(e) = export_openvdb_cli(
+                            renderer,
+                            settings,
+                            viz_config,
+                            &path,
+                            settings.use_log_scale,
+                        ) {
+                            eprintln!("Failed to export OpenVDB: {:#}", e);
+                        }
+                    }
+                }
 
                 ui.separator();
                 ui.heading("Generator");
@@ -1093,8 +1148,120 @@ fn export_volume_cli(
     Ok(())
 }
 
+fn export_openvdb_cli(
+    renderer: &mut RendererResources,
+    settings: &mut RendererSettings,
+    viz: &VisualizationConfig,
+    export_path: &Path,
+    log_normalized: bool,
+) -> Result<()> {
+    // 1. Compute RAW volume (same as export_volume_cli)
+    let resolution = settings.grid_resolution.max(1);
+    let slice_elements = (resolution * resolution) as usize;
+    let mut volume = vec![0f32; slice_elements * resolution as usize];
+    let mut kernel_config = settings.kernel_config();
+    let range = settings.grid_max - settings.grid_min;
+    let denom = (resolution - 1).max(1);
+
+    for zi in 0..resolution {
+        let t = zi as f32 / denom as f32;
+        let offset = settings.grid_min + t * range;
+        settings.plane_offset = offset;
+        kernel_config.grid_params[0] = offset;
+        renderer.update_kernel_config(&kernel_config);
+        renderer
+            .run_update_and_evaluate()
+            .with_context(|| format!("failed to evaluate slice {}", zi))?;
+
+        let mut slice = read_density_slice(renderer, resolution)?;
+        if log_normalized {
+            normalize_slice_log(&mut slice, viz);
+        }
+        let base = zi as usize * slice_elements;
+        volume[base..base + slice_elements].copy_from_slice(&slice);
+    }
+
+    // 2. Write to temp file
+    let temp_dir = env::temp_dir();
+    let uuid = uuid::Uuid::new_v4();
+    let raw_path = temp_dir.join(format!("density_{}.raw", uuid));
+    fs::write(&raw_path, cast_slice(&volume))
+        .with_context(|| format!("failed to write temp RAW volume {}", raw_path.display()))?;
+
+    // 3. Locate vdb_writer
+    let mut tool_path = None;
+    if let Ok(cwd) = env::current_dir() {
+        let p = cwd.join("Tools/vdb_writer");
+        if p.exists() {
+            tool_path = Some(p);
+        } else {
+            let p = cwd.join("vdb_writer");
+            if p.exists() {
+                tool_path = Some(p);
+            }
+        }
+    }
+    if tool_path.is_none() {
+        if let Ok(exe) = env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                let p = parent.join("vdb_writer");
+                if p.exists() {
+                    tool_path = Some(p);
+                }
+            }
+        }
+    }
+
+    // 4. Run vdb_writer
+    if let Some(tool) = tool_path {
+        let spacing = f64::from(range) / f64::from(denom);
+        let status = std::process::Command::new(&tool)
+            .arg("--raw")
+            .arg(&raw_path)
+            .arg("--dim")
+            .arg(resolution.to_string())
+            .arg(resolution.to_string())
+            .arg(resolution.to_string())
+            .arg("--spacing")
+            .arg(spacing.to_string())
+            .arg(spacing.to_string())
+            .arg(spacing.to_string())
+            .arg("--out")
+            .arg(export_path)
+            .status();
+
+        match status {
+            Ok(status) => {
+                if !status.success() {
+                    eprintln!("vdb_writer exited with status: {}", status);
+                } else {
+                    println!("Exported OpenVDB to {}", export_path.display());
+                }
+            }
+            Err(e) => {
+                if let Some(os_error) = e.raw_os_error() {
+                    if os_error == 193 {
+                        eprintln!("Error: The vdb_writer tool at {} is not a valid executable for this OS.", tool.display());
+                        eprintln!("It is likely a macOS binary. Please compile Tools/vdb_writer.cpp for Windows.");
+                    }
+                }
+                return Err(e).with_context(|| format!("failed to run vdb_writer at {}", tool.display()));
+            }
+        }
+
+
+    } else {
+        eprintln!("Could not locate vdb_writer tool. Please build it in Tools/vdb_writer.");
+    }
+
+    // 5. Cleanup
+    let _ = fs::remove_file(&raw_path);
+
+    Ok(())
+}
+
 fn read_density_slice(renderer: &RendererResources, resolution: u32) -> Result<Vec<f32>> {
-    let bytes_per_pixel = 8u32;
+    let bytes_per_pixel = 4u32;
     let width_bytes = resolution * bytes_per_pixel;
     let bytes_per_row = align_to(width_bytes, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer_size = bytes_per_row as u64 * resolution as u64;
@@ -1153,9 +1320,13 @@ fn read_density_slice(renderer: &RendererResources, resolution: u32) -> Result<V
             let row_bytes = &data[offset..offset + row_data_len];
             for (col, value) in chunk.iter_mut().enumerate() {
                 let pixel_offset = col * bytes_per_pixel as usize;
-                let r_bits =
-                    u16::from_le_bytes([row_bytes[pixel_offset], row_bytes[pixel_offset + 1]]);
-                *value = f16::from_bits(r_bits).to_f32();
+                let bytes = [
+                    row_bytes[pixel_offset],
+                    row_bytes[pixel_offset + 1],
+                    row_bytes[pixel_offset + 2],
+                    row_bytes[pixel_offset + 3],
+                ];
+                *value = f32::from_le_bytes(bytes);
             }
         }
     }
