@@ -21,7 +21,7 @@ DerivedData/
 
 # Cargo debug
 target/debug/
-
+target/release/
 
 # Windows build files
 Tools/build
